@@ -16,7 +16,7 @@ class SidebarFullListTests(unittest.TestCase):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
     def test_folder_load_keeps_first_four_files_in_sidebar_catalogue(self):
-        window = DICOMViewer()
+        window = DICOMViewer(settings=False)
         window.show()
         paths = [f"C:/study/image_{index:03d}.dcm" for index in range(9)]
         queued_for_views = []
@@ -44,7 +44,7 @@ class SidebarFullListTests(unittest.TestCase):
         sidebar.deleteLater()
 
     def test_sidebar_drop_does_not_remove_active_file_from_catalogue(self):
-        window = DICOMViewer()
+        window = DICOMViewer(settings=False)
         study_files = ["C:/study/a.dcm", "C:/study/b.dcm"]
         window.sidebar.extra_files = list(study_files)
         callbacks = []

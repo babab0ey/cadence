@@ -100,7 +100,7 @@ class MouseGestureTests(unittest.TestCase):
             view.close()
 
     def test_window_level_mapping_updates_only_active_view(self):
-        window = DICOMViewer()
+        window = DICOMViewer(settings=False)
         window.show()
         data = ViewData(
             original_array=np.arange(32 * 32, dtype=np.uint16).reshape(32, 32),

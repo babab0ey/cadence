@@ -14,7 +14,7 @@ class FocusModeTests(unittest.TestCase):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
     def setUp(self):
-        self.window = DICOMViewer()
+        self.window = DICOMViewer(settings=False)
         self.window.show()
         self.app.processEvents()
 

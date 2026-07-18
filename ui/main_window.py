@@ -32,10 +32,17 @@ logger = get_logger("main_window")
 
 
 class DICOMViewer(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self, settings=None):
         super().__init__()
         self.setWindowTitle("Claude DICOM Viewer")
         self.resize(1300, 950)
+        self._settings_enabled = settings is not False
+        self.settings = (
+            settings
+            if self._settings_enabled and settings is not None
+            else QtCore.QSettings() if self._settings_enabled else None
+        )
+        self.last_opened_folder = ""
         self.brightness = 0
         self.contrast = 1.0
         self.negative_mode = False
@@ -60,9 +67,23 @@ class DICOMViewer(QtWidgets.QMainWindow):
             'lang': 'ru'
         }
 
+        if self._settings_enabled:
+            self.is_dark_theme = self.settings.value(
+                "appearance/dark_theme", False, type=bool
+            )
+            self.app_config["dark_theme"] = self.is_dark_theme
+            self.last_opened_folder = self.settings.value(
+                "files/last_folder", "", type=str
+            )
+
         self.view_data = [ViewData() for _ in range(MAX_VIEWS)]
         self.last_active_view_index = 0
-        self.current_mode_index = 0
+        restored_mode = (
+            self.settings.value("view/layout_mode", 0, type=int)
+            if self._settings_enabled
+            else 0
+        )
+        self.current_mode_index = max(0, min(2, restored_mode))
         self.all_scenes = []
         self.all_views = []
         self.load_pool = QtCore.QThreadPool(self)
@@ -82,8 +103,14 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self._window_level_render_timer.timeout.connect(self._render_pending_window_level)
 
         self._setup_central_widget()
+        if self._settings_enabled:
+            restored_sidebar_width = self.settings.value(
+                "sidebar/width", 260, type=int
+            )
+            self.sidebar.setFixedWidth(max(240, min(280, restored_sidebar_width)))
         self._create_view_widgets()
         self._setup_toolbar()
+        self.toolbar.set_current_mode(self.current_mode_index)
         self._setup_layout_for_mode(self.current_mode_index)
         self.setAcceptDrops(True)
         self._setup_shortcuts()
@@ -91,6 +118,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self._set_initial_focus_and_border)
         self._apply_theme()
         self.toolbar.update_toolbar_icons()
+        if self._settings_enabled:
+            geometry = self.settings.value("window/geometry")
+            if isinstance(geometry, QtCore.QByteArray) and not geometry.isEmpty():
+                self.restoreGeometry(geometry)
 
     def _setup_central_widget(self):
         self.central_widget = QtWidgets.QWidget()
@@ -197,6 +228,34 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def _change_mode(self, index):
         if index != self.current_mode_index:
             self._setup_layout_for_mode(index)
+
+    def _default_open_directory(self):
+        if self.last_opened_folder and os.path.isdir(self.last_opened_folder):
+            return self.last_opened_folder
+        return next(
+            (
+                os.path.dirname(view_data.file_path)
+                for view_data in reversed(self.view_data)
+                if view_data.file_path
+                and os.path.exists(os.path.dirname(view_data.file_path))
+            ),
+            "",
+        )
+
+    def _save_settings(self):
+        if not self._settings_enabled:
+            return
+        geometry = (
+            self._fullscreen_restore_geometry
+            if self._system_fullscreen_active and self._fullscreen_restore_geometry is not None
+            else self.saveGeometry()
+        )
+        self.settings.setValue("appearance/dark_theme", self.is_dark_theme)
+        self.settings.setValue("files/last_folder", self.last_opened_folder)
+        self.settings.setValue("window/geometry", geometry)
+        self.settings.setValue("sidebar/width", self.sidebar.width())
+        self.settings.setValue("view/layout_mode", self.current_mode_index)
+        self.settings.sync()
 
     def _apply_preset(self, index):
         from core.utils import DICOM_PRESETS
@@ -550,8 +609,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def open_file_for_view(self, view_index):
         if not (0 <= view_index < MAX_VIEWS):
             return
-        last_dir = next((os.path.dirname(vd.file_path) for vd in reversed(self.view_data) if
-                         vd.file_path and os.path.exists(os.path.dirname(vd.file_path))), "")
+        last_dir = self._default_open_directory()
         filter_parts = []
         filter_parts.append("Все поддерживаемые (*" + " *".join(sorted(SUPPORTED_EXTS)) + ")")
         filter_parts.append("DICOM Files (*.dcm *.dicom *.ima *.img)")
@@ -562,6 +620,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         file_name, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, f"Открыть файл для окна {view_index + 1}", last_dir, ";;".join(filter_parts))
         if file_name:
+            self.last_opened_folder = os.path.dirname(file_name)
             def on_loaded(_index, _view_data):
                 self.set_active_view(self.all_views[view_index])
                 files_by_ext = scan_folder_for_files(os.path.dirname(file_name))
@@ -577,13 +636,13 @@ class DICOMViewer(QtWidgets.QMainWindow):
 
     def open_folder(self, start_path=None):
         if not start_path:
-            last_dir = next((os.path.dirname(vd.file_path) for vd in reversed(self.view_data) if
-                             vd.file_path and os.path.exists(os.path.dirname(vd.file_path))), "")
+            last_dir = self._default_open_directory()
             options = QtWidgets.QFileDialog.Option.ShowDirsOnly
             folder_path = QtWidgets.QFileDialog.getExistingDirectory(self, "Выбрать папку", last_dir, options=options)
         else:
             folder_path = start_path
         if folder_path:
+            self.last_opened_folder = folder_path
             all_files_in_folder = []
             files_by_ext = scan_folder_for_files(folder_path)
             for ext_list in files_by_ext.values():
@@ -1258,6 +1317,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.is_dark_theme = not self.is_dark_theme
         self.app_config['dark_theme'] = self.is_dark_theme
         self._apply_theme()
+        if self._settings_enabled:
+            self.settings.setValue("appearance/dark_theme", self.is_dark_theme)
         visible_indices = self._get_visible_indices()
         for i in visible_indices:
             self._update_view_border(i, i == self.last_active_view_index)
@@ -1295,6 +1356,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.app_config = new_config
         self.is_dark_theme = self.app_config['dark_theme']
         self._apply_theme()
+        if self._settings_enabled:
+            self.settings.setValue("appearance/dark_theme", self.is_dark_theme)
         for view in self.all_views:
             view.note_color = QtGui.QColor(self.app_config['note_color'])
             view.set_low_quality_mode(self.app_config['low_quality'])
@@ -1361,6 +1424,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         event.ignore()
 
     def closeEvent(self, event):
+        self._save_settings()
         for view_index in range(MAX_VIEWS):
             self._cancel_pending_load(view_index)
         self.load_pool.clear()

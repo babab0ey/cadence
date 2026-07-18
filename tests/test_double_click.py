@@ -64,7 +64,7 @@ class DoubleClickTests(unittest.TestCase):
         self.assertFalse(hasattr(view, "folderOpenRequested"))
 
     def test_double_click_toggles_focus_and_restores_previous_layout(self):
-        window = DICOMViewer()
+        window = DICOMViewer(settings=False)
         window.show()
         window._setup_layout_for_mode(2)
         data = ViewData(original_array=np.zeros((16, 16), dtype=np.uint16))
