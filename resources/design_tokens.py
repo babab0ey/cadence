@@ -183,6 +183,8 @@ def build_stylesheet(dark: bool = False) -> str:
     QWidget#viewportStateOverlay QLabel {{ color: #F5F3EF; background: transparent; }}
     QWidget#viewportStateOverlay QLabel[role='secondary'] {{ color: #9B9590; }}
     QWidget#viewportStateOverlay QPushButton[buttonStyle='ghost'] {{ color: #D8D4CF; }}
+    QWidget#viewportStateOverlay QPushButton[buttonStyle='secondary'] {{ color: #F5F3EF; border-color: rgba(255,255,255,90); }}
+    QWidget#viewportStateOverlay QPushButton[buttonStyle='secondary']:hover {{ color: #FFFFFF; background: rgba(255,255,255,18); border-color: rgba(255,255,255,135); }}
     QFrame#frameControls, QFrame#focusControls {{ background: {t['viewer_overlay']}; border: 1px solid rgba(255,255,255,24); border-radius: {g['radius_lg']}px; }}
     QFrame#focusControls QLabel, QFrame#focusControls QPushButton, QFrame#frameControls QLabel, QFrame#frameControls QPushButton {{ color: #F5F3EF; }}
     QLabel#focusHint {{ background: {t['viewer_overlay']}; color: #F5F3EF; border-radius: {g['radius_sm']}px; padding: 8px 12px; }}
