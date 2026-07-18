@@ -57,6 +57,8 @@ SECONDARY_SPECS = (
     _ActionSpec("tool_roi", "scan", "Область интереса", "Измерить область интереса", "Alt+O", ToolManager.TOOL_ROI),
     _ActionSpec("tool_pen", "pen-line", "Перо", "Нарисовать пометку", "Alt+P", ToolManager.TOOL_PEN),
     _ActionSpec("tool_note", "notebook-pen", "Заметка", "Добавить текстовую заметку", "Alt+N", ToolManager.TOOL_NOTE),
+    _ActionSpec("clear_drawings", "eraser", "Стереть пометки", "Стереть пометки со всех снимков"),
+    _ActionSpec("clear_all", "trash-2", "Очистить всё", "Закрыть исследование и очистить снимки только в приложении"),
 )
 
 
@@ -265,8 +267,6 @@ class TopToolbar(QtWidgets.QToolBar):
             menu.addSeparator()
         for icon, text, action_id in (
             ("file-plus-2", "Открыть отдельный файл", "open_file"),
-            ("eraser", "Очистить пометки", "clear_drawings"),
-            ("trash-2", "Очистить все окна", "clear_all"),
             ("circle-help", "Как пользоваться", "help"),
         ):
             action = QtGui.QAction(make_icon(icon, self._icon_color(), 18), text, menu)
@@ -288,7 +288,10 @@ class TopToolbar(QtWidgets.QToolBar):
             "open_folder": "Открыть",
             "adjustments": "Яркость / Контраст",
             "zoom": "Масштаб",
-            "focus": "Во весь экран",
+            # The shorter human-readable label leaves enough room for every
+            # level-two icon on a 1920 px desktop, including the two new
+            # cleanup actions. The full explanation remains in the tooltip.
+            "focus": "Экран",
         }
         for action_id in PERMANENT_PRIMARY_ORDER:
             button = self._primary_buttons[action_id]

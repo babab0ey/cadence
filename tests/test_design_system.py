@@ -3,7 +3,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtTest, QtWidgets
 
 from models.view_data import ViewData
 from resources.design_tokens import DARK, GEOMETRY, LIGHT, build_stylesheet
@@ -58,6 +58,54 @@ class DesignSystemTests(unittest.TestCase):
         self.assertIn("Иванова Мария", copied)
         self.assertIn("Оборудование", copied)
         dialog.close()
+
+    def test_patient_report_block_supports_mouse_selection_and_ctrl_c(self):
+        vd = ViewData(
+            file_path="study.dcm",
+            patient_name="Иванова Мария",
+            patient_id="12345",
+            institution_name="Городская клиника",
+            series_description="Серия, которая не нужна для отчёта",
+        )
+        dialog = DicomInfoDialog(0, vd, 1.0, 0, 1.0, False, False)
+        editor = dialog.report_text_edit
+        self.assertTrue(editor.isReadOnly())
+        self.assertTrue(editor.textInteractionFlags() & QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        editor.selectAll()
+        editor.copy()
+        copied = self.app.clipboard().text()
+        self.assertIn("Иванова Мария", copied)
+        self.assertIn("Городская клиника", copied)
+        self.assertNotIn("Серия, которая не нужна для отчёта", copied)
+
+        dialog.copy_report()
+        self.assertEqual(self.app.clipboard().text(), editor.toPlainText())
+        dialog.close()
+
+    def test_empty_state_buttons_stay_visible_on_hover_and_offer_folder_or_file(self):
+        window = DICOMViewer(settings=False)
+        window.show()
+        self.app.processEvents()
+        overlay = window.all_views[0]._state_overlay
+        folder_requests = []
+        file_requests = []
+        # Remove the production file-dialog slots: this test verifies the
+        # empty-state routing itself without opening modal native dialogs.
+        window.all_views[0].openFolderRequested.disconnect()
+        window.all_views[0].loadImageRequested.disconnect()
+        window.all_views[0].openFolderRequested.connect(lambda: folder_requests.append(True))
+        window.all_views[0].loadImageRequested.connect(lambda _view: file_requests.append(True))
+
+        self.assertIsNone(overlay.open_button.graphicsEffect())
+        QtTest.QTest.mouseMove(overlay.open_button, overlay.open_button.rect().center())
+        self.app.processEvents()
+        self.assertTrue(overlay.open_button.isVisible())
+        overlay.open_button.click()
+        overlay.open_file_button.click()
+
+        self.assertEqual(folder_requests, [True])
+        self.assertEqual(file_requests, [True])
+        window.close()
 
     def test_settings_offer_light_dark_and_auto(self):
         dialog = SettingsDialog({"theme_mode": "light", "dark_theme": False})

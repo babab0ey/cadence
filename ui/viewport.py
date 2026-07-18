@@ -100,7 +100,8 @@ class SkeletonOverlay(QtWidgets.QWidget):
 
 
 class ViewportStateOverlay(QtWidgets.QWidget):
-    openRequested = QtCore.pyqtSignal()
+    openFolderRequested = QtCore.pyqtSignal()
+    openFileRequested = QtCore.pyqtSignal()
     detailsRequested = QtCore.pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -131,8 +132,16 @@ class ViewportStateOverlay(QtWidgets.QWidget):
         self.open_button.setProperty("buttonStyle", "primary")
         self.open_button.setIcon(make_icon("folder-open", "#FFFFFF", 20))
         self.open_button.setIconSize(QtCore.QSize(20, 20))
-        self.open_button.clicked.connect(self.openRequested)
+        self.open_button.setToolTip("Открыть папку со снимками")
+        self.open_button.clicked.connect(self.openFolderRequested)
         button_row.addWidget(self.open_button)
+        self.open_file_button = QtWidgets.QPushButton("Открыть файл")
+        self.open_file_button.setProperty("buttonStyle", "secondary")
+        self.open_file_button.setIcon(make_icon("file-image", "#F5F3EF", 18))
+        self.open_file_button.setIconSize(QtCore.QSize(18, 18))
+        self.open_file_button.setToolTip("Открыть один отдельный снимок")
+        self.open_file_button.clicked.connect(self.openFileRequested)
+        button_row.addWidget(self.open_file_button)
         self.details_button = QtWidgets.QPushButton("Подробнее")
         self.details_button.setProperty("buttonStyle", "ghost")
         self.details_button.setIcon(make_icon("circle-help", "#F5F3EF", 18))
@@ -160,6 +169,7 @@ class ViewportStateOverlay(QtWidgets.QWidget):
         self.title.setText("Откройте папку с исследованием")
         self.message.setText("Снимки появятся здесь и в панели слева")
         self.open_button.show()
+        self.open_file_button.show()
         self.details_button.hide()
         self._set_empty_icon()
         self._appear()
@@ -169,6 +179,7 @@ class ViewportStateOverlay(QtWidgets.QWidget):
         self.title.setText("Не удалось открыть снимок")
         self.message.setText(message)
         self.open_button.hide()
+        self.open_file_button.hide()
         self.details_button.show()
         self._set_error_icon()
         self._appear()
@@ -190,6 +201,7 @@ class ViewportStateOverlay(QtWidgets.QWidget):
 
 class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     loadImageRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
+    openFolderRequested = QtCore.pyqtSignal()
     viewClicked = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     roiSaveRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView, QtCore.QRectF)
     singleViewToggleRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
@@ -215,6 +227,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
 
         self.undo_stack = QtGui.QUndoStack(self)
         self.measurement_items = []
+        self._annotation_transform = QtGui.QTransform()
 
         self._ruler_tool = RulerTool(self)
         self._angle_tool = AngleTool(self)
@@ -245,7 +258,8 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
 
         self._loading_overlay = SkeletonOverlay(self.viewport())
         self._state_overlay = ViewportStateOverlay(self.viewport())
-        self._state_overlay.openRequested.connect(lambda: self.loadImageRequested.emit(self))
+        self._state_overlay.openFolderRequested.connect(self.openFolderRequested)
+        self._state_overlay.openFileRequested.connect(lambda: self.loadImageRequested.emit(self))
         self._state_overlay.detailsRequested.connect(self.errorDetailsRequested)
         self._state_overlay.show_empty()
 
@@ -307,6 +321,88 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     @property
     def text_notes(self):
         return self._note_tool.text_notes
+
+    def annotation_items(self):
+        """Return top-level user annotations that must follow the image."""
+        result = []
+        for collection in (self.measurement_items, self.pen_items, self.text_notes):
+            for item in collection:
+                if item is not None and item not in result:
+                    result.append(item)
+        return result
+
+    def _register_current_annotations(self):
+        inverse, invertible = self._annotation_transform.inverted()
+        if not invertible:
+            inverse = QtGui.QTransform()
+        for item in self.annotation_items():
+            if getattr(item, "_annotation_registered", False):
+                continue
+            # The item may have been drawn while the image was already flipped
+            # or rotated. Store its canonical image-space transform so future
+            # orientation changes keep it glued to the same pixels.
+            base = QtGui.QTransform(item.sceneTransform()) * inverse
+            item.setPos(0, 0)
+            item.setTransform(base * self._annotation_transform)
+            item._annotation_registered = True
+
+    def set_annotation_transform(self, transform):
+        old_transform = QtGui.QTransform(self._annotation_transform)
+        old_inverse, invertible = old_transform.inverted()
+        if not invertible:
+            old_inverse = QtGui.QTransform()
+        new_transform = QtGui.QTransform(transform)
+        for item in self.annotation_items():
+            if getattr(item, "_annotation_canonical", False):
+                base = QtGui.QTransform(item.transform())
+                item._annotation_canonical = False
+            else:
+                base = QtGui.QTransform(item.sceneTransform()) * old_inverse
+            item.setPos(0, 0)
+            item.setTransform(base * new_transform)
+            item._annotation_registered = True
+        self._annotation_transform = new_transform
+
+    def detach_annotations(self):
+        """Detach annotations in canonical coordinates for a viewport swap."""
+        self.clear_temporary_drawing_items()
+        self._register_current_annotations()
+        inverse, invertible = self._annotation_transform.inverted()
+        if not invertible:
+            inverse = QtGui.QTransform()
+        payload = {
+            "measurements": list(self.measurement_items),
+            "pens": list(self.pen_items),
+            "notes": list(self.text_notes),
+        }
+        self.undo_stack.clear()
+        for item in self.annotation_items():
+            base = QtGui.QTransform(item.sceneTransform()) * inverse
+            item.setPos(0, 0)
+            item.setTransform(base)
+            item._annotation_canonical = True
+            if item.scene() is self.scene():
+                self.scene().removeItem(item)
+        self.measurement_items.clear()
+        self.pen_items.clear()
+        self.text_notes.clear()
+        self._annotation_transform = QtGui.QTransform()
+        return payload
+
+    def attach_annotations(self, payload):
+        scene = self.scene()
+        if scene is None:
+            return
+        mapping = (
+            ("measurements", self.measurement_items),
+            ("pens", self.pen_items),
+            ("notes", self.text_notes),
+        )
+        for key, target in mapping:
+            for item in payload.get(key, ()):
+                if item.scene() is not scene:
+                    scene.addItem(item)
+                target.append(item)
 
     def set_low_quality_mode(self, enabled):
         self.is_low_quality = enabled
@@ -494,6 +590,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     def mouseDoubleClickEvent(self, event):
         if self.tool_mode == ToolManager.TOOL_POLYGON:
             self._polygon_tool.finish_polygon(self.scene(), self.transform().m11())
+            self._register_current_annotations()
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton:
@@ -579,10 +676,12 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
                 self._polygon_tool.on_press(pos, scene, scale)
             elif self.tool_mode == ToolManager.TOOL_NOTE:
                 self._note_tool.on_press(pos, scene, scale)
+                self._register_current_annotations()
                 event.accept()
                 return
             elif self.tool_mode == ToolManager.TOOL_ANGLE:
                 self._angle_tool.on_press(pos, scene, scale)
+                self._register_current_annotations()
             elif self.tool_mode == ToolManager.TOOL_ZOOM_CENTER:
                 self._zoom_start_pos = mouse_pos
                 self._zoom_center = self.mapToScene(self.viewport().rect().center())
@@ -711,6 +810,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
                 self._zoom_start_pos = None
                 event.accept()
                 return
+            self._register_current_annotations()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -803,6 +903,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.image_array_ref = None
         self.pixel_spacing = 1.0
         self.pixmap_item_ref = None
+        self._annotation_transform = QtGui.QTransform()
         self.set_frame_navigation(0, 1)
         self.clear_all_drawing_items()
         self._state_overlay.show_empty()

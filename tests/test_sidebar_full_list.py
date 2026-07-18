@@ -1,6 +1,8 @@
 import os
+import tempfile
 import unittest
 from unittest import mock
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -57,6 +59,23 @@ class SidebarFullListTests(unittest.TestCase):
         callbacks[0][2](0, None)
 
         self.assertEqual(window.sidebar.extra_files, study_files)
+        window.close()
+
+    def test_expanding_from_one_to_four_views_autofills_empty_viewports(self):
+        window = DICOMViewer(settings=False)
+        with tempfile.TemporaryDirectory(prefix="viewer autofill ") as temp_dir:
+            files = [Path(temp_dir) / f"image_{index}.dcm" for index in range(4)]
+            for path in files:
+                path.touch()
+            paths = [str(path) for path in files]
+            window.sidebar.extra_files = list(paths)
+            window.view_data[0].file_path = paths[0]
+            queued = []
+            window._start_file_load = lambda path, index, **_kwargs: queued.append((path, index))
+
+            window._change_mode(2)
+
+            self.assertEqual(queued, [(paths[1], 1), (paths[2], 2), (paths[3], 3)])
         window.close()
 
 

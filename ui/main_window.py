@@ -349,6 +349,37 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def _change_mode(self, index):
         if index != self.current_mode_index:
             self._setup_layout_for_mode(index)
+            self._autofill_visible_views_from_sidebar()
+
+    def _autofill_visible_views_from_sidebar(self):
+        """Fill newly visible empty viewports from the current study catalogue."""
+        visible_indices = self._get_visible_indices()
+        empty_indices = [
+            index
+            for index in visible_indices
+            if not self.view_data[index].file_path
+            and index not in self._active_load_token_by_view
+        ]
+        if not empty_indices:
+            return
+        occupied = {
+            os.path.normcase(os.path.abspath(item.file_path))
+            for item in self.view_data
+            if item.file_path
+        }
+        occupied.update(
+            os.path.normcase(os.path.abspath(context["file_path"]))
+            for context in self._pending_loads.values()
+            if not context.get("cancelled") and context.get("file_path")
+        )
+        candidates = []
+        for file_path in self.sidebar.extra_files:
+            normalized = os.path.normcase(os.path.abspath(file_path))
+            if normalized not in occupied and os.path.isfile(file_path):
+                occupied.add(normalized)
+                candidates.append(file_path)
+        for view_index, file_path in zip(empty_indices, candidates):
+            self._start_file_load(file_path, view_index)
 
     def _default_open_directory(self):
         if self.last_opened_folder and os.path.isdir(self.last_opened_folder):
@@ -626,6 +657,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor(theme_tokens(self.is_dark_theme)["viewer_bg"])))
             view.wheel_zoom_enabled = self.app_config.get("wheel_zoom", True)
             view.loadImageRequested.connect(self._handle_load_request)
+            view.openFolderRequested.connect(self.open_folder)
             view.viewClicked.connect(self.set_active_view)
             view.singleViewToggleRequested.connect(self._toggle_single_view_for_view)
             view.viewDropOccurred.connect(self.swap_view_data)
@@ -1373,6 +1405,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             transform.scale(-1 if vd.flip_h else 1, -1 if vd.flip_v else 1)
             transform.translate(-center.x(), -center.y())
             item.setTransform(transform)
+            self.all_views[view_index].set_annotation_transform(transform)
             return
 
         source_height, source_width = source_size
@@ -1389,6 +1422,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         orientation.scale(-1 if vd.flip_h else 1, -1 if vd.flip_v else 1)
         orientation.translate(-source_center.x(), -source_center.y())
         item.setTransform(scale_transform * orientation)
+        self.all_views[view_index].set_annotation_transform(orientation)
 
     def _update_view_after_transform(self, view_index):
         view = self.all_views[view_index]
@@ -1407,11 +1441,36 @@ class DICOMViewer(QtWidgets.QMainWindow):
             return
         if source_idx == target_idx:
             return
-        self.all_views[source_idx].clear_all_drawing_items()
-        self.all_views[target_idx].clear_all_drawing_items()
+        self._cancel_pending_load(source_idx)
+        self._cancel_pending_load(target_idx)
+        source_annotations = self.all_views[source_idx].detach_annotations()
+        target_annotations = self.all_views[target_idx].detach_annotations()
+        for view_index in (source_idx, target_idx):
+            view = self.all_views[view_index]
+            scene = self.all_scenes[view_index]
+            view.clear_temporary_drawing_items()
+            view.clear_image_data()
+            scene.clear()
+            view.resetTransform()
+            view.horizontalScrollBar().setValue(0)
+            view.verticalScrollBar().setValue(0)
+            vd = self.view_data[view_index]
+            vd.pixmap_item = None
+            vd.overlay_items = []
+            vd.qimage = None
         self.view_data[source_idx], self.view_data[target_idx] = self.view_data[target_idx], self.view_data[source_idx]
-        self._update_single_view_display(source_idx)
-        self._update_single_view_display(target_idx)
+        self.all_views[source_idx].attach_annotations(target_annotations)
+        self.all_views[target_idx].attach_annotations(source_annotations)
+        # Recreate one QImage/QPixmap at a time. Large mammograms otherwise
+        # briefly allocate two extra full-size display buffers during a swap.
+        for view_index in (source_idx, target_idx):
+            vd = self.view_data[view_index]
+            vd.qimage = (
+                convert_numpy_to_qimage(vd.adjusted_array)
+                if vd.adjusted_array is not None
+                else None
+            )
+            self._update_single_view_display(view_index)
         self.set_active_view(self.all_views[target_idx])
 
     def _clear_view_data(self, view_index):
@@ -1480,9 +1539,14 @@ class DICOMViewer(QtWidgets.QMainWindow):
         gc.collect()
 
     def clear_interactive_overlays(self):
-        active_idx = self.last_active_view_index
-        if 0 <= active_idx < MAX_VIEWS:
-            self.all_views[active_idx].clear_all_drawing_items()
+        for view in self.all_views:
+            view.clear_all_drawing_items()
+        self._notify(
+            "success",
+            "Пометки удалены",
+            "Все рисунки, измерения и заметки удалены со всех снимков.",
+            duration=2500,
+        )
 
     def export_active_image(self):
         idx = self.last_active_view_index

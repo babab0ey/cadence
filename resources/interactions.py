@@ -52,7 +52,17 @@ class _ButtonHoverAnimator(QtCore.QObject):
 def install_button_interactions(root, dark=False, animate=True):
     """Install 150 ms hover depth and 500 ms Fluent tooltips once."""
     for button in root.findChildren(QtWidgets.QAbstractButton):
-        if animate and not button.property("premiumInteractionInstalled"):
+        ancestor = button.parentWidget()
+        has_effect_ancestor = False
+        while ancestor is not None and ancestor is not root:
+            if ancestor.graphicsEffect() is not None:
+                has_effect_ancestor = True
+                break
+            ancestor = ancestor.parentWidget()
+        # Qt cannot reliably compose nested QGraphicsEffects. In particular,
+        # adding a hover shadow to a button inside the fading empty-state
+        # overlay can make the button disappear on hover on Windows.
+        if animate and not has_effect_ancestor and not button.property("premiumInteractionInstalled"):
             button.setProperty("premiumInteractionInstalled", True)
             button._hover_animator = _ButtonHoverAnimator(button, dark)
         if button.toolTip() and not button.property("premiumTooltipInstalled"):

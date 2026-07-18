@@ -73,6 +73,7 @@ class DicomInfoDialog(ClaudeDialog):
         self.setMinimumSize(760, 650)
         self._sections = self._build_sections(vd, current_zoom, brightness, contrast, negative_mode)
         self._plain_text = self._make_plain_text()
+        self._report_text = self._make_report_text()
 
         scroll = QtWidgets.QScrollArea()
         scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -83,6 +84,7 @@ class DicomInfoDialog(ClaudeDialog):
         body_layout = QtWidgets.QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(12)
+        body_layout.addWidget(self._report_copy_card())
         for section_name, fields in self._sections:
             body_layout.addWidget(self._section_card(section_name, fields, is_dark_theme))
         body_layout.addStretch()
@@ -91,6 +93,10 @@ class DicomInfoDialog(ClaudeDialog):
 
         close_button = self.add_footer_button("Закрыть", self.accept, "secondary")
         close_button.setToolTip("Закрыть окно информации")
+        self.copy_report_button = self.add_footer_button(
+            "Копировать для отчёта", self.copy_report, "secondary", "copy"
+        )
+        self.copy_report_button.setToolTip("Копировать данные от пациента до учреждения")
         self.copy_all_button = self.add_footer_button("Копировать всё", self.copy_all, "primary", "copy")
         self.copy_all_button.setDefault(True)
 
@@ -140,6 +146,34 @@ class DicomInfoDialog(ClaudeDialog):
             layout.addWidget(PatientField(label, value, dark, card))
         return card
 
+    def _report_copy_card(self):
+        card = QtWidgets.QFrame()
+        card.setObjectName("sectionCard")
+        layout = QtWidgets.QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        heading = QtWidgets.QLabel("Данные для отчёта")
+        heading.setProperty("role", "sectionTitle")
+        layout.addWidget(heading)
+        hint = QtWidgets.QLabel(
+            "Можно выделить мышью только нужные строки и нажать Ctrl+C."
+        )
+        hint.setProperty("role", "caption")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.report_text_edit = QtWidgets.QPlainTextEdit(self._report_text)
+        self.report_text_edit.setObjectName("reportCopyArea")
+        self.report_text_edit.setReadOnly(True)
+        self.report_text_edit.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.report_text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.report_text_edit.setMinimumHeight(250)
+        self.report_text_edit.setAccessibleName("Данные пациента для копирования в отчёт")
+        layout.addWidget(self.report_text_edit)
+        return card
+
     def _make_plain_text(self):
         lines = []
         for section, fields in self._sections:
@@ -148,6 +182,25 @@ class DicomInfoDialog(ClaudeDialog):
             lines.append(section)
             lines.extend(f"{label}: {value}" for label, value in fields)
         return "\n".join(lines)
+
+    def _make_report_text(self):
+        lines = []
+        for section, fields in self._sections[:2]:
+            if lines:
+                lines.append("")
+            lines.append(section)
+            lines.extend(f"{label}: {value}" for label, value in fields)
+        return "\n".join(lines)
+
+    def copy_report(self):
+        QtWidgets.QApplication.clipboard().setText(self._report_text)
+        self.copy_report_button.setText("Скопировано")
+        self.copy_report_button.setIcon(make_icon("check", theme_tokens(self.dark)["text_primary"], 20))
+        QtCore.QTimer.singleShot(800, self._restore_copy_report)
+
+    def _restore_copy_report(self):
+        self.copy_report_button.setText("Копировать для отчёта")
+        self.copy_report_button.setIcon(make_icon("copy", theme_tokens(self.dark)["text_primary"], 20))
 
     def copy_all(self):
         QtWidgets.QApplication.clipboard().setText(self._plain_text)
