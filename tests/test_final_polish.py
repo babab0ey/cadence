@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 
 from core.tasks import FileLoadTask
+from main import application_icon
 from models.view_data import ViewData
 from ui.main_window import DICOMViewer
 
@@ -33,6 +34,9 @@ class FinalPolishTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_cadence_application_icon_is_bundled(self):
+        self.assertFalse(application_icon().isNull())
 
     def test_window_title_uses_short_patient_name_and_iso_date(self):
         window = DICOMViewer(settings=False)

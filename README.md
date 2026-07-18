@@ -65,7 +65,20 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Готовую Windows‑сборку рекомендуется публиковать во вкладке **Releases**, а не хранить `.exe` в истории Git. После публикации её можно будет скачать без установки Python.
+### Готовая версия для Windows
+
+[Скачать последнюю версию Cadence](https://github.com/babab0ey/cadence/releases/latest) — один файл `Cadence.exe`, установка Python не требуется.
+
+Windows может показать предупреждение SmartScreen, поскольку бесплатная сборка пока не подписана коммерческим сертификатом. Проверьте, что файл скачан именно из раздела Releases этого репозитория.
+
+### Самостоятельная сборка EXE
+
+```powershell
+pip install -r requirements-build.txt
+pyinstaller --clean --noconfirm cadence.spec
+```
+
+Готовый файл появится в `dist/Cadence.exe`. Бинарные сборки публикуются во вкладке **Releases**, а не хранятся в истории Git.
 
 ## Технологии
 
