@@ -776,8 +776,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             for ext_list in files_by_ext.values():
                 all_files_in_folder.extend(ext_list)
             if not all_files_in_folder:
-                QtWidgets.QMessageBox.information(self, "Файлы не найдены",
-                                                  f"В папке:\n{folder_path}\nне найдено поддерживаемых файлов.")
+                self._notify("info", "Файлы не найдены", "В выбранной папке нет поддерживаемых снимков.")
                 return
             dicom_files = []
             for ext in DICOM_EXTS:
@@ -791,17 +790,21 @@ class DICOMViewer(QtWidgets.QMainWindow):
                     self.load_files(selected_files)
 
     def _show_format_selection_dialog(self, files_by_ext):
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Выбор формата файлов")
-        dialog.setModal(True)
-        dialog.resize(400, 300)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        title_label = QtWidgets.QLabel("В папке не найдено приоритетных DICOM файлов.\nВыберите формат для загрузки:")
-        title_label.setWordWrap(True)
-        layout.addWidget(title_label)
+        from ui.dialogs.base_dialog import ClaudeDialog
+        dialog = ClaudeDialog(
+            "Какие файлы открыть?",
+            "В папке нет основных DICOM-снимков. Выберите подходящую группу.",
+            self.is_dark_theme,
+            self,
+        )
+        dialog.setMinimumSize(520, 390)
         format_list = QtWidgets.QListWidget()
         format_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        format_groups = {'Изображения': IMAGE_EXTS, 'JSON': JSON_EXTS, 'DICOM (другие)': DICOM_EXTS}
+        format_groups = {
+            'Обычные изображения': IMAGE_EXTS,
+            'Данные JSON': JSON_EXTS,
+            'Другие медицинские снимки DICOM': DICOM_EXTS,
+        }
         for group_name, exts in format_groups.items():
             group_files = []
             for ext in exts:
@@ -812,15 +815,11 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 item = QtWidgets.QListWidgetItem(item_text)
                 item.setData(Qt.ItemDataRole.UserRole, group_files)
                 format_list.addItem(item)
-        layout.addWidget(format_list)
-        button_box = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
-        button_box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setEnabled(False)
-        format_list.itemSelectionChanged.connect(
-            lambda: button_box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setEnabled(True))
+        dialog.content_layout.addWidget(format_list)
+        dialog.add_footer_button("Отмена", dialog.reject, "secondary")
+        open_button = dialog.add_footer_button("Открыть выбранное", dialog.accept, "primary", "folder-open")
+        open_button.setEnabled(False)
+        format_list.itemSelectionChanged.connect(lambda: open_button.setEnabled(True))
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             current_item = format_list.currentItem()
             if current_item:
@@ -883,10 +882,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
             if state["first_loaded_index"] != -1:
                 self._update_visible_views_display()
             elif state["loaded"] == 0:
-                QtWidgets.QMessageBox.warning(
-                    self,
+                self._notify(
+                    "error",
                     "Не удалось открыть исследование",
-                    "Ни один из выбранных снимков не удалось открыть. Подробности сохранены в журнале.",
+                    "Ни один снимок не открылся. Подробности сохранены в журнале.",
                 )
             self._batch_load_state = None
 
@@ -1021,17 +1020,26 @@ class DICOMViewer(QtWidgets.QMainWindow):
         exc_info = (type(cause), cause, cause.__traceback__) if cause is not None else None
         logger.error("Ошибка открытия: %s", error, exc_info=exc_info)
 
+        self._notify(
+            "error",
+            error.user_title,
+            f"{error.user_message} Подробности сохранены в журнале.",
+        )
+
+    def _notify(self, kind, title, content, duration=4000):
         try:
             from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.error(
-                error.user_title,
-                f"{error.user_message} Подробности сохранены в журнале.",
-                duration=4000,
+            factory = getattr(InfoBar, kind, InfoBar.info)
+            return factory(
+                title,
+                content,
+                duration=duration,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 parent=self,
             )
         except ImportError:
-            self.statusBar().showMessage(error.user_message, 4000)
+            self.statusBar().showMessage(content, duration)
+            return None
 
     def _show_error_details(self, details):
         message = QtWidgets.QMessageBox(self)
@@ -1391,11 +1399,11 @@ class DICOMViewer(QtWidgets.QMainWindow):
         vd = self.view_data[idx]
         scene = self.all_scenes[idx]
         if not vd.pixmap_item or vd.pixmap_item.pixmap().isNull():
-            QtWidgets.QMessageBox.warning(self, "Экспорт", "Нет изображения для экспорта.")
+            self._notify("warning", "Снимок не выбран", "Сначала откройте снимок, который хотите сохранить.")
             return
         src_rect = scene.itemsBoundingRect()
         if src_rect.isEmpty() or not src_rect.isValid():
-            QtWidgets.QMessageBox.warning(self, "Экспорт", "Не удалось определить область для экспорта.")
+            self._notify("error", "Не удалось сохранить", "Не удалось определить область снимка.")
             return
         src_rect.adjust(-10, -10, 10, 10)
         target_size = QtCore.QSize(math.ceil(src_rect.width()), math.ceil(src_rect.height()))
@@ -1409,13 +1417,13 @@ class DICOMViewer(QtWidgets.QMainWindow):
         painter.end()
         base_name = os.path.splitext(os.path.basename(vd.file_path or f'view_{idx + 1}'))[0]
         default_name = f"{base_name}_export.png"
-        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, f"Экспорт окна {idx + 1}", default_name,
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(self, f"Сохранить снимок {idx + 1}", default_name,
                                                               "PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp)")
         if file_path:
             if not img.save(file_path, quality=100):
-                QtWidgets.QMessageBox.warning(self, "Экспорт", f"Ошибка сохранения файла: {file_path}")
+                self._notify("error", "Не удалось сохранить", f"Проверьте доступ к папке: {file_path}")
             else:
-                QtWidgets.QMessageBox.information(self, "Экспорт", f"Изображение сохранено:\n{file_path}")
+                self._notify("success", "Снимок сохранён", file_path)
 
     def set_tool_for_visible_views(self, tool_name):
         self.toolbar.set_tool_for_visible_views(tool_name)
@@ -1496,7 +1504,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             return
         vd = self.view_data[idx]
         if not vd.file_path:
-            QtWidgets.QMessageBox.information(self, "Инфо", f"Нет данных для окна {idx + 1}.")
+            self._notify("info", "Информация пока недоступна", "Сначала откройте снимок пациента.")
             return
         current_zoom = self.all_views[idx].transform().m11() if self.all_views[idx] else 1.0
         dlg = DicomInfoDialog(idx, vd, current_zoom, self.brightness, self.contrast, self.negative_mode, self.is_dark_theme, self)

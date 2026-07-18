@@ -91,7 +91,7 @@ class RoiRectTool:
         self.roi_text = None
 
     def _compute_stats(self, region, rect, shape_type):
-        region_float = region.astype(np.float64)
+        region_float = region.astype(np.float32)
         mean_val = np.mean(region_float)
         std_val = np.std(region_float)
         min_val_disp = np.min(region_float)
@@ -105,12 +105,13 @@ class RoiRectTool:
         if abs(pixel_spacing - 1.0) < 1e-9:
             area_unit = "px²"
             area_val = area_px
-        return (f"Mean: {mean_val:.1f}\nStdDev: {std_val:.1f}\nMin: {min_val_disp:.1f}\n"
-                f"Max: {max_val_disp:.1f}\nArea: {area_val:.1f} {area_unit}")
+        return (f"Среднее значение: {mean_val:.1f}\nОтклонение: {std_val:.1f}\n"
+                f"Минимум: {min_val_disp:.1f}\nМаксимум: {max_val_disp:.1f}\n"
+                f"Площадь: {area_val:.1f} {area_unit}")
 
     def _ask_save_roi(self, rect):
         reply = QtWidgets.QMessageBox.question(
-            self.view, 'Сохранить ROI',
+            self.view, 'Сохранить область интереса',
             'Хотите сохранить выделенную область как изображение?',
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
         )
@@ -131,16 +132,16 @@ class RoiRectTool:
                 roi_qimage = convert_numpy_to_qimage(roi_region)
                 if not roi_qimage.isNull():
                     file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                        self.view, "Сохранить ROI область",
+                        self.view, "Сохранить область интереса",
                         f"roi_region_{x1}_{y1}_{x2 - x1}x{y2 - y1}.png",
                         "PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tif *.tiff)"
                     )
                     if file_path:
                         if not roi_qimage.save(file_path, quality=95):
-                            QtWidgets.QMessageBox.warning(self.view, "Ошибка", f"Не удалось сохранить ROI область: {file_path}")
+                            QtWidgets.QMessageBox.warning(self.view, "Ошибка", f"Не удалось сохранить область интереса: {file_path}")
                             return False
                         else:
-                            QtWidgets.QMessageBox.information(self.view, "Успех", f"ROI область сохранена: {file_path}")
+                            QtWidgets.QMessageBox.information(self.view, "Готово", f"Область интереса сохранена: {file_path}")
                             return True
         return False
 

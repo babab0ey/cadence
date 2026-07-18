@@ -70,18 +70,18 @@ def update_image_overlay(view_index, vd, scene, view, is_dark_theme=False, brigh
 
     overlay_font.setPixelSize(font_size)
 
-    wc_str = f"{vd.wc:.0f}" if isinstance(vd.wc, (int, float)) else 'N/A'
-    ww_str = f"{vd.ww:.0f}" if isinstance(vd.ww, (int, float)) else 'N/A'
+    wc_str = f"{vd.wc:.0f}" if isinstance(vd.wc, (int, float)) else '—'
+    ww_str = f"{vd.ww:.0f}" if isinstance(vd.ww, (int, float)) else '—'
 
     projection = _detect_projection(vd)
 
     info = {
-        'tl': [f"{vd.patient_name}", f"ID: {vd.patient_id}"],
-        'tr': [f"{vd.institution_name}", f"Study: {vd.study_date}"],
+        'tl': [f"{vd.patient_name}", f"Идентификатор: {vd.patient_id}"],
+        'tr': [f"{vd.institution_name}", f"Исследование: {vd.study_date}"],
         'tc': [projection] if projection else [],
-        'bl': [f"WL/WW: {wc_str}/{ww_str}", f"Zoom: {scale:.1f}x"],
+        'bl': [f"Яркость / Контраст: {wc_str}/{ww_str}", f"Масштаб: {scale:.1f}×"],
         'br': [f"{vd.modality} {get_projection_info(vd)}".strip(),
-               f"{'NEG' if negative_mode else 'POS'} B:{brightness} C:{contrast:.1f}"]
+               f"{'Негатив' if negative_mode else 'Обычный'} · Ярк.: {brightness} · Контр.: {contrast:.1f}"]
     }
 
     positions = {
