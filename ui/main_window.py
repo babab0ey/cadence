@@ -116,6 +116,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.sidebar.restore_state(restored_sidebar_width, restored_sidebar_collapsed)
         initial_sidebar_width = 48 if restored_sidebar_collapsed else self.sidebar.expanded_width
         self.splitter.setSizes([initial_sidebar_width, max(640, self.width() - initial_sidebar_width)])
+        self.sidebar.resize(initial_sidebar_width, self.sidebar.height())
         self._create_view_widgets()
         self._setup_toolbar()
         self.toolbar.set_current_mode(self.current_mode_index)
