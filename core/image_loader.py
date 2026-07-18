@@ -250,18 +250,31 @@ def load_dicom_file(file_path, frame_index=0):
     if view_data.pixel_spacing < 1e-9:
         view_data.pixel_spacing = 1.0
 
-    view_data.patient_name = fix_dicom_encoding(str(dataset.get("PatientName", "N/A")))
-    view_data.patient_id = fix_dicom_encoding(str(dataset.get("PatientID", "N/A")))
+    specific_character_set = dataset.get("SpecificCharacterSet")
+    view_data.patient_name = fix_dicom_encoding(
+        str(dataset.get("PatientName", "N/A")), specific_character_set
+    )
+    view_data.patient_id = fix_dicom_encoding(
+        str(dataset.get("PatientID", "N/A")), specific_character_set
+    )
     view_data.patient_birth_date = format_dicom_date(str(dataset.get("PatientBirthDate", "")))
     view_data.patient_sex = str(dataset.get("PatientSex", "N/A"))
     view_data.study_date = format_dicom_date(str(dataset.get("StudyDate", "")))
     view_data.study_time = format_dicom_time(str(dataset.get("StudyTime", "")))
-    view_data.study_description = fix_dicom_encoding(str(dataset.get("StudyDescription", "N/A")))
+    view_data.study_description = fix_dicom_encoding(
+        str(dataset.get("StudyDescription", "N/A")), specific_character_set
+    )
     view_data.modality = str(dataset.get("Modality", "N/A"))
-    view_data.institution_name = fix_dicom_encoding(str(dataset.get("InstitutionName", "N/A")))
-    view_data.body_part = fix_dicom_encoding(str(dataset.get("BodyPartExamined", "N/A")))
+    view_data.institution_name = fix_dicom_encoding(
+        str(dataset.get("InstitutionName", "N/A")), specific_character_set
+    )
+    view_data.body_part = fix_dicom_encoding(
+        str(dataset.get("BodyPartExamined", "N/A")), specific_character_set
+    )
     view_data.view_position = str(dataset.get("ViewPosition", ""))
-    view_data.series_description = fix_dicom_encoding(str(dataset.get("SeriesDescription", "")))
+    view_data.series_description = fix_dicom_encoding(
+        str(dataset.get("SeriesDescription", "")), specific_character_set
+    )
 
     del dataset
     gc.collect()

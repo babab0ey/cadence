@@ -27,19 +27,42 @@ except ImportError:
     print("Warning: Pillow не установлен. Поддержка PNG/JPEG недоступна.")
 
 
-def fix_dicom_encoding(text, target_encoding='cp1251', source_encoding_guess='latin1'):
-    if not isinstance(text, str) or not text:
+def _has_declared_character_set(specific_character_set):
+    """Return whether DICOM metadata explicitly declares a text encoding."""
+    if isinstance(specific_character_set, (list, tuple)):
+        return any(str(value).strip() for value in specific_character_set)
+    return bool(str(specific_character_set).strip()) if specific_character_set is not None else False
+
+
+def fix_dicom_encoding(text, specific_character_set=None):
+    """Repair only high-confidence CP1251-as-Latin-1 mojibake.
+
+    Pydicom already honours SpecificCharacterSet.  Re-decoding text after that can
+    corrupt valid names such as ``Müller`` or ``José``, so declared encodings and
+    ambiguous strings are deliberately returned unchanged.
+    """
+    if not isinstance(text, str) or not text or _has_declared_character_set(specific_character_set):
         return text
-    needs_fix = any(0x80 <= ord(char) <= 0xFF for char in text)
-    if needs_fix:
-        try:
-            original_bytes = text.encode(source_encoding_guess)
-            correct_text = original_bytes.decode(target_encoding)
-            return correct_text
-        except (UnicodeEncodeError, UnicodeDecodeError, LookupError):
-            return text
-    else:
+    if any("\u0400" <= char <= "\u052f" for char in text):
         return text
+
+    significant = [char for char in text if char.isalpha()]
+    latin1_suspects = [char for char in significant if "\u0080" <= char <= "\u00ff"]
+    if len(latin1_suspects) < 4 or len(latin1_suspects) / max(len(significant), 1) < 0.65:
+        return text
+
+    try:
+        candidate = text.encode("latin1").decode("cp1251")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+    candidate_letters = [char for char in candidate if char.isalpha()]
+    cyrillic_letters = [char for char in candidate_letters if "\u0400" <= char <= "\u052f"]
+    cyrillic_ratio = len(cyrillic_letters) / max(len(candidate_letters), 1)
+    has_russian_vowel = any(char.lower() in "аеёиоуыэюя" for char in cyrillic_letters)
+    if len(cyrillic_letters) >= 4 and cyrillic_ratio >= 0.7 and has_russian_vowel:
+        return candidate
+    return text
 
 
 def convert_numpy_to_qimage(pixel_array):
