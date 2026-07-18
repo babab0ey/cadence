@@ -326,9 +326,11 @@ class SidebarWidget(QtWidgets.QWidget):
         self.search_bar.setPlaceholderText("Поиск по файлам…")
         self.search_bar.setClearButtonEnabled(True)
         self._search_action = self.search_bar.addAction(QtGui.QIcon(), QtWidgets.QLineEdit.ActionPosition.LeadingPosition)
-        clear_button = self.search_bar.findChild(QtWidgets.QToolButton)
-        if clear_button is not None:
-            clear_button.setToolTip("Очистить поиск")
+        self._search_action.setToolTip("Поиск по файлам")
+        for action_button in self.search_bar.findChildren(QtWidgets.QToolButton):
+            action_button.setToolTip(
+                "Поиск по файлам" if action_button.defaultAction() is self._search_action else "Очистить поиск"
+            )
         search_layout.addWidget(self.search_bar)
         self._search_wrap = search_wrap
         layout.addWidget(search_wrap)

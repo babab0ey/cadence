@@ -49,10 +49,10 @@ class _ButtonHoverAnimator(QtCore.QObject):
         self.effect.setColor(color)
 
 
-def install_button_interactions(root, dark=False):
+def install_button_interactions(root, dark=False, animate=True):
     """Install 150 ms hover depth and 500 ms Fluent tooltips once."""
     for button in root.findChildren(QtWidgets.QAbstractButton):
-        if not button.property("premiumInteractionInstalled"):
+        if animate and not button.property("premiumInteractionInstalled"):
             button.setProperty("premiumInteractionInstalled", True)
             button._hover_animator = _ButtonHoverAnimator(button, dark)
         if button.toolTip() and not button.property("premiumTooltipInstalled"):

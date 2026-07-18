@@ -80,12 +80,14 @@ class ClaudeDialog(QtWidgets.QDialog):
         surface_layout.addWidget(header)
 
         self.content = QtWidgets.QWidget()
+        self.content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         self.content_layout = QtWidgets.QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(24, 12, 24, 16)
         self.content_layout.setSpacing(16)
         surface_layout.addWidget(self.content, 1)
 
         self.footer = QtWidgets.QWidget()
+        self.footer.setFixedHeight(74)
         self.footer_layout = QtWidgets.QHBoxLayout(self.footer)
         self.footer_layout.setContentsMargins(24, 8, 24, 24)
         self.footer_layout.setSpacing(8)
@@ -104,7 +106,10 @@ class ClaudeDialog(QtWidgets.QDialog):
         return button
 
     def showEvent(self, event):
-        install_button_interactions(self, self.dark)
+        # Nested QGraphicsEffects disappear inside the dialog surface's layered
+        # shadow on Windows, so modal buttons keep Fluent/QSS hover motion while
+        # the custom 150 ms depth effect remains enabled for the main shell.
+        install_button_interactions(self, self.dark, animate=False)
         self._show_backdrop()
         final_geometry = self.geometry()
         start_geometry = QtCore.QRect(final_geometry)

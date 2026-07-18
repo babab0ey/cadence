@@ -42,31 +42,18 @@ def update_image_overlay(view_index, vd, scene, view, is_dark_theme=False, brigh
     overlay_color = QtGui.QColor("#D97757")  # Claude clay accent
     if is_dark_theme:
         overlay_color = QtGui.QColor("#F0B89C")  # softer in dark mode
-    margin = 8
     bounds = pixmap_item.boundingRect()
-    scale = view.transform().m11()
-
-    screen_dpi = view.logicalDpiX()
-    base_dpi = 96.0
-    dpi_factor = max(1.2, screen_dpi / base_dpi)
-
-    if scale >= 2.0:
-        base_font_size = 18
-    elif scale >= 1.0:
-        base_font_size = 24
-    elif scale >= 0.5:
-        base_font_size = 32
-    elif scale >= 0.2:
-        base_font_size = 40
-    else:
-        base_font_size = 48
-
-    font_size = int(base_font_size * dpi_factor)
-    font_size = max(20, min(60, font_size))
-
-    device_pixel_ratio = view.devicePixelRatio()
-    if device_pixel_ratio > 1.5:
-        font_size = int(font_size * 1.5)
+    scale = max(0.01, abs(view.transform().m11()))
+    # Text is parented to the pixmap and therefore scales with the scene. Keep
+    # its on-screen size near 12 px instead of enlarging it with the image. A
+    # tiny matrix (for example a 10×10 dose sample) cannot carry readable
+    # metadata without covering the pixels, so its overlay is intentionally
+    # omitted.
+    ideal_font_size = 12 / scale
+    if ideal_font_size < 1.0:
+        return
+    font_size = max(1, min(96, round(ideal_font_size)))
+    margin = max(2, round(8 / scale))
 
     overlay_font.setPixelSize(font_size)
 
@@ -75,13 +62,17 @@ def update_image_overlay(view_index, vd, scene, view, is_dark_theme=False, brigh
 
     projection = _detect_projection(vd)
 
+    def shortened(value, limit=24):
+        text = str(value or "—")
+        return text if len(text) <= limit else f"{text[:limit - 1]}…"
+
     info = {
-        'tl': [f"{vd.patient_name}", f"Идентификатор: {vd.patient_id}"],
-        'tr': [f"{vd.institution_name}", f"Исследование: {vd.study_date}"],
+        'tl': [shortened(vd.patient_name), f"Идентификатор: {shortened(vd.patient_id, 18)}"],
+        'tr': [shortened(vd.institution_name, 20), f"Дата: {vd.study_date}"],
         'tc': [projection] if projection else [],
-        'bl': [f"Яркость / Контраст: {wc_str}/{ww_str}", f"Масштаб: {scale:.1f}×"],
+        'bl': [f"Яркость: {wc_str}", f"Контраст: {ww_str}", f"Масштаб: {scale:.1f}×"],
         'br': [f"{vd.modality} {get_projection_info(vd)}".strip(),
-               f"{'Негатив' if negative_mode else 'Обычный'} · Ярк.: {brightness} · Контр.: {contrast:.1f}"]
+               "Негатив" if negative_mode else "Обычный вид"]
     }
 
     positions = {

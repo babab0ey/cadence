@@ -78,7 +78,7 @@ class DicomInfoDialog(ClaudeDialog):
         scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("background: transparent; border: none;")
+        scroll.viewport().setAutoFillBackground(False)
         body = QtWidgets.QWidget()
         body_layout = QtWidgets.QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)

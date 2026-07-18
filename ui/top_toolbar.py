@@ -66,7 +66,8 @@ class TopToolbar(QtWidgets.QToolBar):
     presetChanged = QtCore.pyqtSignal(int)
     actionTriggered = QtCore.pyqtSignal(str)
 
-    COMPACT_BREAKPOINT = 1080
+    COMPACT_BREAKPOINT = 2000
+    ICONIC_BREAKPOINT = 1050
     SECONDARY_BREAKPOINT = 1480
 
     def __init__(self, parent=None):
@@ -164,12 +165,23 @@ class TopToolbar(QtWidgets.QToolBar):
         QtCore.QTimer.singleShot(0, self._update_responsive_state)
 
     def _make_primary_button(self, spec):
-        button = QtWidgets.QPushButton(spec.text, self._surface)
+        initial_text = {
+            "info": "Инфо",
+            "open_folder": "Открыть",
+            "adjustments": "",
+            "zoom": "",
+            "focus": "",
+        }[spec.action_id]
+        button = QtWidgets.QPushButton(initial_text, self._surface)
         button.setObjectName(f"primaryAction_{spec.action_id}")
         button.setProperty("buttonStyle", "secondary" if spec.action_id == "info" else "ghost")
         if spec.action_id == "open_folder":
             button.setProperty("buttonStyle", "primary")
         button.setMinimumHeight(44)
+        initially_icon_only = spec.action_id in ("adjustments", "zoom", "focus")
+        button.setProperty("iconOnly", initially_icon_only)
+        if initially_icon_only:
+            button.setMaximumWidth(GEOMETRY["hit_target"])
         button.setToolTip(spec.tooltip)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         if spec.action_id == "zoom":
@@ -208,11 +220,15 @@ class TopToolbar(QtWidgets.QToolBar):
         button.setObjectName(f"secondaryAction_{spec.action_id}")
         button.setProperty("buttonStyle", "ghost")
         button.setProperty("iconOnly", True)
+        button.setFixedSize(GEOMETRY["hit_target"], GEOMETRY["hit_target"])
         button.setToolTip(spec.tooltip)
         button.setCheckable(action.isCheckable())
         button.clicked.connect(action.trigger)
         action.toggled.connect(button.setChecked)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Start overflow-only so the layout never inflates a laptop window
+        # before its first responsive width calculation.
+        button.hide()
         return button
 
     def _separator(self):
@@ -266,6 +282,7 @@ class TopToolbar(QtWidgets.QToolBar):
         if not self._built:
             return
         compact = self.width() <= self.COMPACT_BREAKPOINT
+        iconic = self.width() <= self.ICONIC_BREAKPOINT
         compact_text = {
             "info": "Инфо",
             "open_folder": "Открыть",
@@ -274,18 +291,28 @@ class TopToolbar(QtWidgets.QToolBar):
             "focus": "Во весь экран",
         }
         for action_id in PERMANENT_PRIMARY_ORDER:
-            self._primary_buttons[action_id].setText(
-                compact_text[action_id] if compact else PRIMARY_SPECS[action_id].text
-            )
+            button = self._primary_buttons[action_id]
+            icon_only = iconic and action_id in ("adjustments", "zoom", "focus")
+            button.setText("" if icon_only else compact_text[action_id] if compact else PRIMARY_SPECS[action_id].text)
+            button.setProperty("iconOnly", icon_only)
+            button.setMaximumWidth(GEOMETRY["hit_target"] if icon_only else 16777215)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
         # At common laptop widths every level-two action is deliberately in
         # “Ещё”. On large screens actions return in order while they fit.
-        budget = max(0, self.width() - 820)
+        primary_width = sum(button.sizeHint().width() for button in self._primary_buttons.values())
+        more_width = self.more_button.sizeHint().width()
+        secondary_costs = [
+            max(GEOMETRY["hit_target"], min(button.sizeHint().width(), button.maximumWidth())) + self._layout.spacing()
+            for _spec, _action, button in self._secondary_buttons
+        ]
+        fits_all = self.width() >= self.SECONDARY_BREAKPOINT and sum(secondary_costs) <= max(0, self.width() - primary_width - 72)
+        budget = max(0, self.width() - primary_width - more_width - 80)
         show_secondary = self.width() >= self.SECONDARY_BREAKPOINT
         used = 0
-        for _spec, _action, button in self._secondary_buttons:
-            cost = max(GEOMETRY["hit_target"], button.sizeHint().width()) + self._layout.spacing()
-            visible = show_secondary and used + cost <= budget
+        for (_spec, _action, button), cost in zip(self._secondary_buttons, secondary_costs):
+            visible = fits_all or (show_secondary and used + cost <= budget)
             button.setVisible(visible)
             if visible:
                 used += cost

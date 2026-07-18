@@ -23,6 +23,7 @@ from core.tasks import FileLoadTask
 from models.view_data import ViewData
 from resources.design_tokens import GEOMETRY, build_stylesheet, theme_tokens
 from resources.interactions import install_button_interactions
+from resources.icons import make_icon
 from tools.tool_manager import ToolManager
 from ui.viewport import InteractiveGraphicsView
 from ui.sidebar import SidebarWidget
@@ -212,10 +213,11 @@ class DICOMViewer(QtWidgets.QMainWindow):
         focus_controls_layout.setContentsMargins(6, 6, 6, 6)
         focus_controls_layout.setSpacing(6)
 
-        self.focus_info_button = QtWidgets.QPushButton("ⓘ  Инфо")
+        self.focus_info_button = QtWidgets.QPushButton("Инфо")
         self.focus_info_button.setObjectName("focusInfoButton")
         self.focus_info_button.setToolTip("Информация о пациенте")
         self.focus_info_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.focus_info_button.setIcon(make_icon("info", "#F5F3EF", 20))
         self.focus_info_button.clicked.connect(self.show_study_info_dialog)
         focus_controls_layout.addWidget(self.focus_info_button)
 
@@ -223,6 +225,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.focus_exit_button.setObjectName("focusExitButton")
         self.focus_exit_button.setToolTip("Вернуться к предыдущей раскладке (Esc)")
         self.focus_exit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.focus_exit_button.setIcon(make_icon("minimize-2", "#F5F3EF", 20))
         self.focus_exit_button.clicked.connect(self._exit_single_view_mode)
         focus_controls_layout.addWidget(self.focus_exit_button)
         self.focus_controls.adjustSize()
@@ -684,24 +687,15 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def _update_view_border(self, index, active):
         if 0 <= index < len(self.all_views):
             view = self.all_views[index]
-            if self.is_dark_theme:
-                bg = "#1F1F1D"
-                if active:
-                    style = (f"QGraphicsView {{ border: 1.5px solid #D97757; border-radius: 10px;"
-                             f"background-color: {bg}; }}")
-                else:
-                    style = (f"QGraphicsView {{ border: 1px solid rgba(250,249,245,0.08); border-radius: 10px;"
-                             f"background-color: {bg}; }}")
-                view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor(bg)))
-            else:
-                bg = "#F0EEE6"
-                if active:
-                    style = (f"QGraphicsView {{ border: 1.5px solid #D97757; border-radius: 10px;"
-                             f"background-color: {bg}; }}")
-                else:
-                    style = (f"QGraphicsView {{ border: 1px solid rgba(20,20,19,0.08); border-radius: 10px;"
-                             f"background-color: {bg}; }}")
-                view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor(bg)))
+            tokens = theme_tokens(self.is_dark_theme)
+            bg = tokens["viewer_bg"]
+            border = tokens["accent"] if active else tokens["border"]
+            border_width = 2 if active else 1
+            style = (
+                f"QGraphicsView {{ border: {border_width}px solid {border}; "
+                f"border-radius: {GEOMETRY['radius_lg']}px; background-color: {bg}; }}"
+            )
+            view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor(bg)))
             view.setStyleSheet(style)
 
     def _handle_load_request(self, view_object):

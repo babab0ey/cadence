@@ -46,12 +46,13 @@ class ResponsiveShellTests(unittest.TestCase):
         self.assertTrue(self.window.toolbar.more_button.isVisible())
 
         self._resize(1920, 1080)
-        self.assertTrue(any(button.isVisible() for _spec, _action, button in self.window.toolbar._secondary_buttons))
+        self.assertTrue(all(button.isVisible() for _spec, _action, button in self.window.toolbar._secondary_buttons))
+        self.assertFalse(self.window.toolbar.more_button.isVisible())
 
         self._resize(1280, 720)
         self.assertTrue(all(not button.isVisible() for _spec, _action, button in self.window.toolbar._secondary_buttons))
         self._resize(1920, 1080)
-        self.assertTrue(any(button.isVisible() for _spec, _action, button in self.window.toolbar._secondary_buttons))
+        self.assertTrue(all(button.isVisible() for _spec, _action, button in self.window.toolbar._secondary_buttons))
 
     def test_window_minimum_and_sidebar_compact_state(self):
         self.assertGreaterEqual(self.window.minimumWidth(), 900)

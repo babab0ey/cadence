@@ -261,10 +261,11 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         frame_layout.setContentsMargins(8, 6, 8, 6)
         frame_layout.setSpacing(8)
 
-        self._previous_frame_button = QtWidgets.QPushButton("‹")
+        self._previous_frame_button = QtWidgets.QPushButton()
         self._previous_frame_button.setObjectName("frameNavigationButton")
         self._previous_frame_button.setToolTip("Предыдущий кадр (Alt + колесо вниз)")
-        self._previous_frame_button.setFixedSize(34, 34)
+        self._previous_frame_button.setFixedSize(44, 44)
+        self._previous_frame_button.setIcon(make_icon("chevron-left", "#F5F3EF", 20))
         self._previous_frame_button.clicked.connect(lambda: self._step_frame(-1))
         frame_layout.addWidget(self._previous_frame_button)
 
@@ -281,10 +282,11 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self._frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         frame_layout.addWidget(self._frame_label)
 
-        self._next_frame_button = QtWidgets.QPushButton("›")
+        self._next_frame_button = QtWidgets.QPushButton()
         self._next_frame_button.setObjectName("frameNavigationButton")
         self._next_frame_button.setToolTip("Следующий кадр (Alt + колесо вверх)")
-        self._next_frame_button.setFixedSize(34, 34)
+        self._next_frame_button.setFixedSize(44, 44)
+        self._next_frame_button.setIcon(make_icon("chevron-right", "#F5F3EF", 20))
         self._next_frame_button.clicked.connect(lambda: self._step_frame(1))
         frame_layout.addWidget(self._next_frame_button)
         self._frame_controls.hide()
