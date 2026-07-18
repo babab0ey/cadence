@@ -21,6 +21,7 @@ from core.errors import ViewerError, wrap_unexpected_error
 from core.logging_config import get_log_file, get_logger
 from core.tasks import FileLoadTask
 from models.view_data import ViewData
+from resources.design_tokens import GEOMETRY, build_stylesheet
 from tools.tool_manager import ToolManager
 from ui.viewport import InteractiveGraphicsView
 from ui.sidebar import SidebarWidget
@@ -36,6 +37,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("Claude DICOM Viewer")
         self.resize(1300, 950)
+        self._minimum_ui_size = QtCore.QSize(900, 600)
         self._settings_enabled = settings is not False
         self.settings = (
             settings
@@ -122,6 +124,14 @@ class DICOMViewer(QtWidgets.QMainWindow):
             geometry = self.settings.value("window/geometry")
             if isinstance(geometry, QtCore.QByteArray) and not geometry.isEmpty():
                 self.restoreGeometry(geometry)
+
+    def showEvent(self, event):
+        # Apply the responsive lower bound when the native window exists.  This
+        # avoids Qt clamping a saved geometry against a temporary/offscreen
+        # screen before the window is ever shown.
+        if self.minimumSize() != self._minimum_ui_size:
+            self.setMinimumSize(self._minimum_ui_size)
+        super().showEvent(event)
 
     def _setup_central_widget(self):
         self.central_widget = QtWidgets.QWidget()
@@ -1406,26 +1416,26 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self._update_image_overlay(i)
 
     def _apply_theme(self):
-        resources_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'resources')
-        if self.is_dark_theme:
-            qss_path = os.path.join(resources_dir, 'style_dark.qss')
-        else:
-            qss_path = os.path.join(resources_dir, 'style_light.qss')
-        if os.path.exists(qss_path):
-            with open(qss_path, 'r', encoding='utf-8') as f:
-                self.setStyleSheet(f.read())
-        else:
-            if self.is_dark_theme:
-                self.setStyleSheet("QMainWindow { background-color: #262624; color: #FAF9F5; }")
-            else:
-                self.setStyleSheet("QMainWindow { background-color: #FAF9F5; color: #141413; }")
+        # The generated stylesheet is the sole visual source of truth. Applying
+        # it to QApplication also themes transient dialogs and Fluent popups.
+        try:
+            from qfluentwidgets import Theme, setTheme, setThemeColor
+            setTheme(Theme.DARK if self.is_dark_theme else Theme.LIGHT)
+            setThemeColor("#D97757")
+        except ImportError:
+            logger.warning("PyQt6-Fluent-Widgets недоступен; используются базовые Qt-компоненты")
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_stylesheet(self.is_dark_theme))
         # Sync toolbar
         if hasattr(self, 'toolbar'):
             self.toolbar.is_dark_theme = self.is_dark_theme
             self.toolbar.update_toolbar_icons()
-        # Toggle handle arrow color
-        if hasattr(self, 'toggle_handle'):
-            self.toggle_handle.setText("◀" if self.sidebar.isVisible() else "▶")
+        if hasattr(self, "sidebar") and hasattr(self.sidebar, "apply_theme"):
+            self.sidebar.apply_theme(self.is_dark_theme)
+        for view in getattr(self, "all_views", []):
+            if hasattr(view, "apply_theme"):
+                view.apply_theme(self.is_dark_theme)
 
     def open_settings(self):
         from ui.dialogs.settings_dialog import SettingsDialog
@@ -1444,10 +1454,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.set_low_quality_mode(self.app_config['low_quality'])
         font = QtWidgets.QApplication.font()
         if self.app_config['large_ui']:
-            font.setPointSize(12)
+            font.setPixelSize(17)
             self.toolbar.setIconSize(QtCore.QSize(40, 40))
         else:
-            font.setPointSize(9)
+            font.setPixelSize(GEOMETRY["font_base"])
             self.toolbar.setIconSize(QtCore.QSize(24, 24))
         QtWidgets.QApplication.setFont(font)
 

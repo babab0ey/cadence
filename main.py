@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6 import QtWidgets, QtGui, QtCore
 from core.logging_config import get_logger, install_exception_hooks, setup_logging
+from resources.design_tokens import GEOMETRY, build_stylesheet, register_inter_font
 from ui.main_window import DICOMViewer
 
 
@@ -24,36 +25,17 @@ def main():
     app.setApplicationName("Claude DICOM Viewer")
     app.setOrganizationName("Anthropic-Inspired")
 
-    # Force Fusion style (most consistent with QSS)
+    # Fusion gives deterministic widget geometry; the visual language itself is
+    # generated from resources/design_tokens.py.
     app.setStyle("Fusion")
 
-    # Default font matching Claude's Anthropic Sans (with system fallback)
-    # We use Segoe UI Variable as it's the closest stock font on Windows.
-    font_candidates = [
-        "Segoe UI Variable",
-        "Segoe UI",
-        "Inter",
-        "SF Pro Text",
-        "system-ui",
-    ]
-    available_families = set(QtGui.QFontDatabase.families())
-    chosen_family = "Segoe UI"
-    for family in font_candidates:
-        if family in available_families:
-            chosen_family = family
-            break
-
-    font = QtGui.QFont(chosen_family, 9)
+    chosen_family = register_inter_font()
+    font = QtGui.QFont(chosen_family)
+    font.setPixelSize(GEOMETRY["font_base"])
     font.setHintingPreference(QtGui.QFont.HintingPreference.PreferDefaultHinting)
     font.setStyleStrategy(QtGui.QFont.StyleStrategy.PreferAntialias)
     app.setFont(font)
-
-    # Load stylesheet
-    resources_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources')
-    qss_path = os.path.join(resources_dir, 'style_light.qss')
-    if os.path.exists(qss_path):
-        with open(qss_path, 'r', encoding='utf-8') as f:
-            app.setStyleSheet(f.read())
+    app.setStyleSheet(build_stylesheet(False))
 
     window = DICOMViewer()
     window.show()
