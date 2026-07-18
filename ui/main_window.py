@@ -226,6 +226,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             "flip_v": self.flip_vertical,
             "adjustments": self.open_adjustment_dialog,
             "undo": self._undo_action,
+            "redo": self._redo_action,
             "settings": self.open_settings,
             "help": self.open_help,
             "focus": self._toggle_system_fullscreen,
@@ -289,6 +290,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def _undo_action(self):
         if 0 <= self.last_active_view_index < MAX_VIEWS:
             self.all_views[self.last_active_view_index].undo_stack.undo()
+
+    def _redo_action(self):
+        if 0 <= self.last_active_view_index < MAX_VIEWS:
+            self.all_views[self.last_active_view_index].undo_stack.redo()
 
     def _handle_escape(self):
         if self.focus_mode or self._system_fullscreen_active:
