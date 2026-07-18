@@ -1,4 +1,6 @@
 PyQt6>=6.5.0
-pydicom>=2.4.0
-numpy>=1.24.0
+pydicom>=3.0.0
+numpy>=2.0.0,<3.0
 Pillow>=10.0.0
+pylibjpeg[all]>=2.0.0
+pyjpegls>=1.5.0

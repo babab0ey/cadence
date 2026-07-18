@@ -1,216 +1,458 @@
-import os
+import gc
 import json
-import traceback
+import os
+
 import numpy as np
 import pydicom
 from pydicom.errors import InvalidDicomError
-from core.utils import (
-    fix_dicom_encoding, format_dicom_date, format_dicom_time,
-    PIL_AVAILABLE, DICOM_EXTS, IMAGE_EXTS, JSON_EXTS, SUPPORTED_EXTS
+
+from core.errors import (
+    CorruptFileError,
+    FileAccessError,
+    InvalidMetadataError,
+    MemoryLimitError,
+    MissingCodecError,
+    ProcessingError,
+    UnsupportedFormatError,
+    ViewerError,
+    wrap_unexpected_error,
 )
-from core.image_processor import apply_rescale, apply_window_level, normalize_image, apply_brightness_contrast
-from core.utils import convert_numpy_to_qimage
+from core.image_processor import (
+    apply_brightness_contrast,
+    apply_rescale_window,
+    downsample_array,
+    normalize_image,
+)
+from core.logging_config import get_logger
+from core.utils import (
+    DICOM_EXTS,
+    IMAGE_EXTS,
+    JSON_EXTS,
+    PIL_AVAILABLE,
+    convert_numpy_to_qimage,
+    fix_dicom_encoding,
+    format_dicom_date,
+    format_dicom_time,
+)
 from models.view_data import ViewData
 
-try:
-    import pydicom.pixel_data_handlers.gdcm_handler as _gdcm_handler
-    import pydicom.pixel_data_handlers.pylibjpeg_handler as _pylibjpeg_handler
-except ImportError:
-    pass
+
+logger = get_logger("image_loader")
+
+MAX_IMAGE_PIXELS = 100_000_000
+PIXEL_DATA_TAGS = (0x7FE00010, 0x7FE00008, 0x7FE00009)
 
 
-def load_dicom_file(file_path):
+def _read_dicom_metadata(file_path):
     try:
-        ds = pydicom.dcmread(file_path, force=True)
-        if 'PixelData' not in ds:
-            raise ValueError("Файл не содержит тег PixelData.")
-
+        return pydicom.dcmread(file_path, defer_size=1024, force=False)
+    except InvalidDicomError:
         try:
-            pixel_array = ds.pixel_array
-        except Exception as e:
-            ts = ds.file_meta.TransferSyntaxUID if hasattr(ds, 'file_meta') else 'Unknown UID'
-            msg = (
-                f"Не удалось распаковать пиксельные данные.\n"
-                f"Синтаксис: {ts.name if hasattr(ts, 'name') else ts}\n"
-                f"Возможно, нужно установить доп. библиотеки: pip install pydicom[gdcm] pylibjpeg\n\nОшибка: {e}"
-            )
-            raise RuntimeError(msg) from e
+            dataset = pydicom.dcmread(file_path, defer_size=1024, force=True)
+        except Exception as exc:
+            raise CorruptFileError(file_path, f"{type(exc).__name__}: {exc}", exc) from exc
+        if not dataset or not any(tag in dataset for tag in PIXEL_DATA_TAGS):
+            raise CorruptFileError(file_path, "Файл не содержит корректной структуры DICOM")
+        return dataset
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        raise FileAccessError(file_path, f"{type(exc).__name__}: {exc}", exc) from exc
+    except Exception as exc:
+        raise CorruptFileError(file_path, f"{type(exc).__name__}: {exc}", exc) from exc
 
-        if pixel_array is None or pixel_array.size == 0:
-            raise ValueError("pixel_array пустой.")
 
-        num_frames = getattr(ds, 'NumberOfFrames', 1)
-        display_array = pixel_array[0] if num_frames > 1 and pixel_array.ndim > 2 else pixel_array
+def _get_transfer_syntax(dataset):
+    file_meta = getattr(dataset, "file_meta", None)
+    return getattr(file_meta, "TransferSyntaxUID", None) if file_meta is not None else None
 
-        vd = ViewData()
-        vd.file_path = file_path
-        vd.original_array = display_array.copy()
-        vd.file_type = 'dicom'
-        vd.photometric_interpretation = ds.get('PhotometricInterpretation', 'MONOCHROME2')
-        vd.rescale_slope = float(ds.get('RescaleSlope', 1.0))
-        vd.rescale_intercept = float(ds.get('RescaleIntercept', 0.0))
-        vd.number_of_frames = num_frames
 
-        def get_first_val(value):
-            return value[0] if isinstance(value, pydicom.multival.MultiValue) and value else value
+def _has_pixel_data(dataset):
+    return any(tag in dataset for tag in PIXEL_DATA_TAGS)
 
-        wc_val = get_first_val(ds.get('WindowCenter'))
-        ww_val = get_first_val(ds.get('WindowWidth'))
-        if wc_val is None or ww_val is None:
-            voi_lut_seq = ds.get('VOILUTSequence')
-            if voi_lut_seq:
-                wc_val = get_first_val(voi_lut_seq[0].get('WindowCenter', wc_val))
-                ww_val = get_first_val(voi_lut_seq[0].get('WindowWidth', ww_val))
 
-        vd.wc = float(wc_val) if wc_val is not None else None
-        vd.ww = float(ww_val) if ww_val is not None and float(ww_val) >= 1 else None
+def _classify_dicom_decode_error(exc, file_path, dataset):
+    if isinstance(exc, ViewerError):
+        return exc
+    if isinstance(exc, MemoryError):
+        return MemoryLimitError(file_path, str(exc), exc)
 
-        ps_val = get_first_val(ds.get('PixelSpacing', ds.get('ImagerPixelSpacing')))
-        vd.pixel_spacing = float(ps_val[0] if isinstance(ps_val, list) else ps_val) if ps_val else 1.0
-        if vd.pixel_spacing < 1e-9:
-            vd.pixel_spacing = 1.0
+    message = f"{type(exc).__name__}: {exc}"
+    lowered = message.lower()
+    transfer_syntax = _get_transfer_syntax(dataset)
 
-        vd.patient_name = fix_dicom_encoding(str(ds.get('PatientName', 'N/A')))
-        vd.patient_id = fix_dicom_encoding(str(ds.get('PatientID', 'N/A')))
-        vd.patient_birth_date = format_dicom_date(ds.get('PatientBirthDate', ''))
-        vd.patient_sex = str(ds.get('PatientSex', 'N/A'))
-        vd.study_date = format_dicom_date(ds.get('StudyDate', ''))
-        vd.study_time = format_dicom_time(ds.get('StudyTime', ''))
-        vd.study_description = fix_dicom_encoding(str(ds.get('StudyDescription', 'N/A')))
-        vd.modality = str(ds.get('Modality', 'N/A'))
-        vd.institution_name = fix_dicom_encoding(str(ds.get('InstitutionName', 'N/A')))
-        vd.body_part = fix_dicom_encoding(str(ds.get('BodyPartExamined', 'N/A')))
-        vd.view_position = str(ds.get('ViewPosition', ''))
-        vd.series_description = fix_dicom_encoding(str(ds.get('SeriesDescription', '')))
+    codec_markers = (
+        "missing dependencies",
+        "plugins are missing",
+        "no suitable plugins",
+        "unable to decompress",
+        "decoder plugins",
+        "requires gdcm",
+        "requires pylibjpeg",
+        "requires pyjpegls",
+    )
+    if any(marker in lowered for marker in codec_markers):
+        detail = f"TransferSyntaxUID={transfer_syntax or 'отсутствует'}; {message}"
+        return MissingCodecError(file_path, detail, exc)
 
-        return vd
-    except Exception as e:
-        msg = f"Ошибка обработки DICOM:\n{os.path.basename(file_path)}\n\n{type(e).__name__}: {e}"
-        raise RuntimeError(msg) from e
+    unsupported_markers = (
+        "no pixel data decoders have been implemented",
+        "unsupported transfer syntax",
+        "not a transfer syntax",
+        "pixel data decoder is not available",
+    )
+    if any(marker in lowered for marker in unsupported_markers):
+        return UnsupportedFormatError(file_path, message, exc)
+
+    metadata_markers = (
+        "transfer syntax uid",
+        "missing required element",
+        "bits allocated",
+        "bits stored",
+        "samples per pixel",
+        "photometric interpretation",
+        "no pixel data",
+        "pixel data element",
+        "rows",
+        "columns",
+    )
+    if any(marker in lowered for marker in metadata_markers):
+        return InvalidMetadataError(file_path, message, exc)
+
+    corrupt_markers = (
+        "less than expected",
+        "excess padding",
+        "truncated",
+        "unexpected tag",
+        "misplaced marker",
+        "invalid value for vr",
+        "broken data stream",
+        "cannot identify image",
+        "decompression bomb",
+    )
+    if any(marker in lowered for marker in corrupt_markers):
+        return CorruptFileError(file_path, message, exc)
+
+    return CorruptFileError(file_path, message, exc)
+
+
+def _decode_dicom_frame(file_path, dataset, frame_index=0):
+    try:
+        from pydicom.pixels import pixel_array as decode_pixel_array
+
+        return decode_pixel_array(file_path, index=frame_index)
+    except InvalidDicomError:
+        # Rare legacy files without the DICOM preamble require force=True. This
+        # fallback may read the raw PixelData, but still keeps only one frame.
+        try:
+            dataset.pixel_array_options(index=frame_index)
+            decoded = dataset.pixel_array
+            return np.array(decoded, copy=True)
+        except Exception as exc:
+            raise _classify_dicom_decode_error(exc, file_path, dataset) from exc
+    except Exception as exc:
+        raise _classify_dicom_decode_error(exc, file_path, dataset) from exc
+
+
+def _first_value(value):
+    if isinstance(value, pydicom.multival.MultiValue):
+        return value[0] if value else None
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else None
+    return value
+
+
+def _safe_float(value, default, file_path, field_name):
+    if value in (None, ""):
+        return default
+    try:
+        return float(_first_value(value))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise InvalidMetadataError(
+            file_path,
+            f"Некорректное поле {field_name}: {value!r}",
+            exc,
+        ) from exc
+
+
+def _validate_pixel_array(array, file_path):
+    if array is None or array.size == 0:
+        raise CorruptFileError(file_path, "Пиксельные данные пусты")
+    if array.ndim not in (2, 3):
+        raise UnsupportedFormatError(file_path, f"Неподдерживаемая форма массива: {array.shape}")
+    height, width = array.shape[:2]
+    if height <= 0 or width <= 0:
+        raise InvalidMetadataError(file_path, f"Некорректный размер: {array.shape}")
+    if height * width > MAX_IMAGE_PIXELS:
+        raise MemoryLimitError(
+            file_path,
+            f"Размер {width}x{height} превышает безопасный предел {MAX_IMAGE_PIXELS} пикселей",
+        )
+
+
+def load_dicom_file(file_path, frame_index=0):
+    dataset = _read_dicom_metadata(file_path)
+    if not _has_pixel_data(dataset):
+        raise InvalidMetadataError(file_path, "Файл не содержит пиксельных данных")
+
+    transfer_syntax = _get_transfer_syntax(dataset)
+    if transfer_syntax is None:
+        raise InvalidMetadataError(file_path, "Отсутствует обязательный TransferSyntaxUID")
+
+    try:
+        number_of_frames = max(1, int(getattr(dataset, "NumberOfFrames", 1) or 1))
+    except (TypeError, ValueError) as exc:
+        raise InvalidMetadataError(file_path, "Некорректное NumberOfFrames", exc) from exc
+    if not 0 <= int(frame_index) < number_of_frames:
+        raise InvalidMetadataError(
+            file_path,
+            f"Кадр {frame_index + 1} отсутствует; всего кадров: {number_of_frames}",
+        )
+
+    logger.info(
+        "Открытие DICOM: %s; TransferSyntaxUID=%s; frame=%s/%s",
+        file_path,
+        transfer_syntax,
+        frame_index + 1,
+        number_of_frames,
+    )
+    pixel_array = _decode_dicom_frame(file_path, dataset, frame_index)
+    pixel_array = np.asarray(pixel_array)
+    _validate_pixel_array(pixel_array, file_path)
+    if not pixel_array.flags.c_contiguous:
+        pixel_array = np.ascontiguousarray(pixel_array)
+
+    view_data = ViewData()
+    view_data.file_path = file_path
+    view_data.original_array = pixel_array
+    view_data.file_type = "dicom"
+    view_data.photometric_interpretation = str(
+        dataset.get("PhotometricInterpretation", "MONOCHROME2")
+    )
+    view_data.rescale_slope = _safe_float(dataset.get("RescaleSlope"), 1.0, file_path, "RescaleSlope")
+    view_data.rescale_intercept = _safe_float(
+        dataset.get("RescaleIntercept"), 0.0, file_path, "RescaleIntercept"
+    )
+    view_data.number_of_frames = number_of_frames
+
+    wc_value = _first_value(dataset.get("WindowCenter"))
+    ww_value = _first_value(dataset.get("WindowWidth"))
+    if wc_value is None or ww_value is None:
+        voi_lut_sequence = dataset.get("VOILUTSequence")
+        if voi_lut_sequence:
+            wc_value = _first_value(voi_lut_sequence[0].get("WindowCenter", wc_value))
+            ww_value = _first_value(voi_lut_sequence[0].get("WindowWidth", ww_value))
+    view_data.wc = _safe_float(wc_value, None, file_path, "WindowCenter")
+    parsed_ww = _safe_float(ww_value, None, file_path, "WindowWidth")
+    view_data.ww = parsed_ww if parsed_ww is not None and parsed_ww >= 1.0 else None
+
+    spacing = dataset.get("PixelSpacing", dataset.get("ImagerPixelSpacing"))
+    view_data.pixel_spacing = _safe_float(spacing, 1.0, file_path, "PixelSpacing")
+    if view_data.pixel_spacing < 1e-9:
+        view_data.pixel_spacing = 1.0
+
+    view_data.patient_name = fix_dicom_encoding(str(dataset.get("PatientName", "N/A")))
+    view_data.patient_id = fix_dicom_encoding(str(dataset.get("PatientID", "N/A")))
+    view_data.patient_birth_date = format_dicom_date(str(dataset.get("PatientBirthDate", "")))
+    view_data.patient_sex = str(dataset.get("PatientSex", "N/A"))
+    view_data.study_date = format_dicom_date(str(dataset.get("StudyDate", "")))
+    view_data.study_time = format_dicom_time(str(dataset.get("StudyTime", "")))
+    view_data.study_description = fix_dicom_encoding(str(dataset.get("StudyDescription", "N/A")))
+    view_data.modality = str(dataset.get("Modality", "N/A"))
+    view_data.institution_name = fix_dicom_encoding(str(dataset.get("InstitutionName", "N/A")))
+    view_data.body_part = fix_dicom_encoding(str(dataset.get("BodyPartExamined", "N/A")))
+    view_data.view_position = str(dataset.get("ViewPosition", ""))
+    view_data.series_description = fix_dicom_encoding(str(dataset.get("SeriesDescription", "")))
+
+    del dataset
+    gc.collect()
+    return view_data
 
 
 def load_image_file(file_path):
     if not PIL_AVAILABLE:
-        raise RuntimeError("Для загрузки изображений необходимо установить Pillow:\npip install Pillow")
+        raise UnsupportedFormatError(file_path, "Для обычных изображений требуется Pillow")
     try:
         from PIL import Image as PILImage
-        with PILImage.open(file_path) as img:
-            if img.mode != 'L':
-                img_array = np.array(img.convert('L'))
-            else:
-                img_array = np.array(img)
 
-        vd = ViewData()
-        vd.file_path = file_path
-        vd.original_array = img_array.copy()
-        vd.file_type = 'image'
-        vd.number_of_frames = 1
-        vd.photometric_interpretation = 'MONOCHROME2'
-        vd.rescale_slope = 1.0
-        vd.rescale_intercept = 0.0
-        vd.wc = None
-        vd.ww = None
-        vd.pixel_spacing = 1.0
-        vd.patient_name = os.path.basename(file_path)
-        vd.patient_id = 'IMAGE'
-        vd.study_description = f'Изображение {os.path.splitext(file_path)[1].upper()}'
-        vd.modality = 'IMG'
+        with PILImage.open(file_path) as image:
+            # The Pillow object is closed at the end of this block, therefore the
+            # NumPy buffer must own its memory.
+            image_array = np.array(image.convert("L"), copy=True)
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        raise FileAccessError(file_path, f"{type(exc).__name__}: {exc}", exc) from exc
+    except Exception as exc:
+        raise CorruptFileError(file_path, f"{type(exc).__name__}: {exc}", exc) from exc
 
-        return vd
-    except Exception as e:
-        msg = f"Ошибка загрузки изображения:\n{os.path.basename(file_path)}\n\n{type(e).__name__}: {e}"
-        raise RuntimeError(msg) from e
+    view_data = ViewData()
+    view_data.file_path = file_path
+    view_data.original_array = image_array
+    view_data.file_type = "image"
+    view_data.photometric_interpretation = "MONOCHROME2"
+    view_data.patient_name = os.path.basename(file_path)
+    view_data.patient_id = "IMAGE"
+    view_data.study_description = f"Изображение {os.path.splitext(file_path)[1].upper()}"
+    view_data.modality = "IMG"
+    return view_data
 
 
 def load_json_file(file_path):
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        with open(file_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        raise FileAccessError(file_path, f"{type(exc).__name__}: {exc}", exc) from exc
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise CorruptFileError(file_path, f"{type(exc).__name__}: {exc}", exc) from exc
 
-        image_data = None
-        if isinstance(data, dict):
-            possible_keys = ['image', 'data', 'array', 'pixels', 'pixel_data']
-            for key in possible_keys:
-                if key in data:
-                    image_data = data[key]
-                    break
-            if image_data is None and all(isinstance(v, (list, int, float)) for v in data.values()):
-                image_data = list(data.values())
-        elif isinstance(data, list):
-            image_data = data
+    image_data = None
+    if isinstance(data, dict):
+        for key in ("image", "data", "array", "pixels", "pixel_data"):
+            if key in data:
+                image_data = data[key]
+                break
+        if image_data is None and all(isinstance(value, (list, int, float)) for value in data.values()):
+            image_data = list(data.values())
+    elif isinstance(data, list):
+        image_data = data
+    if image_data is None:
+        raise UnsupportedFormatError(file_path, "В JSON не найдены данные изображения")
 
-        if image_data is not None:
-            img_array = np.array(image_data)
-            if img_array.ndim >= 2 and img_array.size > 0:
-                if img_array.dtype != np.uint8:
-                    img_min, img_max = np.min(img_array), np.max(img_array)
-                    if img_max > img_min:
-                        img_array = ((img_array - img_min) / (img_max - img_min) * 255).astype(np.uint8)
-                    else:
-                        img_array = np.full(img_array.shape, 128, dtype=np.uint8)
-                if img_array.ndim > 2:
-                    img_array = img_array[0]
+    try:
+        image_array = np.asarray(image_data)
+    except Exception as exc:
+        raise CorruptFileError(file_path, f"Некорректный массив JSON: {exc}", exc) from exc
+    if image_array.ndim < 2 or image_array.size == 0:
+        raise UnsupportedFormatError(file_path, "JSON не содержит двумерного изображения")
+    if image_array.ndim > 2:
+        image_array = image_array[0]
+    _validate_pixel_array(image_array, file_path)
 
-                vd = ViewData()
-                vd.file_path = file_path
-                vd.original_array = img_array.copy()
-                vd.file_type = 'json'
-                vd.photometric_interpretation = 'MONOCHROME2'
-                vd.patient_name = os.path.basename(file_path)
-                vd.patient_id = 'JSON'
-                vd.pixel_spacing = 1.0
-                return vd
-            else:
-                raise ValueError("JSON не содержит подходящих данных для изображения")
-        else:
-            raise ValueError("Не найдены данные изображения в JSON")
-    except Exception as e:
-        msg = f"Ошибка загрузки JSON:\n{os.path.basename(file_path)}\n\n{type(e).__name__}: {e}"
-        raise RuntimeError(msg) from e
+    view_data = ViewData()
+    view_data.file_path = file_path
+    view_data.original_array = image_array
+    view_data.file_type = "json"
+    view_data.photometric_interpretation = "MONOCHROME2"
+    view_data.patient_name = os.path.basename(file_path)
+    view_data.patient_id = "JSON"
+    return view_data
 
 
-def load_generic_file(file_path):
+def load_generic_file(file_path, frame_index=0):
     if not file_path or not os.path.exists(file_path):
-        return None
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in DICOM_EXTS:
-        return load_dicom_file(file_path)
-    elif ext in IMAGE_EXTS:
-        return load_image_file(file_path)
-    elif ext in JSON_EXTS:
-        return load_json_file(file_path)
-    return None
+        raise FileAccessError(file_path, "Файл не найден")
+    extension = os.path.splitext(file_path)[1].lower()
+    try:
+        if extension in DICOM_EXTS:
+            return load_dicom_file(file_path, frame_index=frame_index)
+        if extension in IMAGE_EXTS:
+            return load_image_file(file_path)
+        if extension in JSON_EXTS:
+            return load_json_file(file_path)
+        raise UnsupportedFormatError(file_path, f"Расширение {extension or 'отсутствует'}")
+    except ViewerError:
+        raise
+    except BaseException as exc:
+        raise wrap_unexpected_error(exc, file_path) from exc
 
 
-def apply_adjustments_pipeline(vd, brightness=0, contrast=1.0, negative=False):
-    if vd.original_array is None:
-        vd.rescaled_array = None
-        vd.base_8bit_array = None
-        vd.adjusted_array = None
-        vd.qimage = None
+def apply_adjustments_pipeline(view_data, brightness=0, contrast=1.0, negative=False):
+    if view_data.original_array is None:
+        view_data.rescaled_array = None
+        view_data.base_8bit_array = None
+        view_data.adjusted_array = None
+        view_data.qimage = None
         return
 
     try:
-        vd.rescaled_array = apply_rescale(vd.original_array, vd.rescale_slope, vd.rescale_intercept)
-        pi = vd.photometric_interpretation
-        if vd.wc is not None and vd.ww is not None:
-            vd.base_8bit_array = apply_window_level(vd.rescaled_array, vd.wc, vd.ww, pi)
-        else:
-            vd.base_8bit_array = normalize_image(vd.rescaled_array, pi)
-        vd.adjusted_array = apply_brightness_contrast(vd.base_8bit_array, brightness, contrast, negative)
-        vd.qimage = convert_numpy_to_qimage(vd.adjusted_array)
-    except Exception as e:
-        print(f"Error applying adjustments pipeline: {e}")
-        vd.rescaled_array = None
-        vd.base_8bit_array = None
-        vd.adjusted_array = None
-        vd.qimage = None
+        reusable_base = view_data.base_8bit_array
+        view_data.base_8bit_array = apply_rescale_window(
+            view_data.original_array,
+            view_data.rescale_slope,
+            view_data.rescale_intercept,
+            view_data.wc,
+            view_data.ww,
+            view_data.photometric_interpretation,
+            out=reusable_base,
+        )
+        view_data.rescaled_array = None
+
+        reusable_adjusted = view_data.adjusted_array
+        if reusable_adjusted is view_data.base_8bit_array:
+            reusable_adjusted = None
+        view_data.adjusted_array = apply_brightness_contrast(
+            view_data.base_8bit_array,
+            brightness,
+            contrast,
+            negative,
+            out=reusable_adjusted if (brightness != 0 or contrast != 1.0 or negative) else None,
+        )
+        view_data.qimage = convert_numpy_to_qimage(view_data.adjusted_array)
+    except MemoryError as exc:
+        raise MemoryLimitError(view_data.file_path or "", str(exc), exc) from exc
+    except ViewerError:
+        raise
+    except Exception as exc:
+        raise ProcessingError(
+            view_data.file_path or "",
+            f"{type(exc).__name__}: {exc}",
+            exc,
+        ) from exc
+    finally:
+        gc.collect()
 
 
-def update_brightness_contrast_only(vd, brightness=0, contrast=1.0, negative=False):
-    if vd.base_8bit_array is None:
+def update_brightness_contrast_only(view_data, brightness=0, contrast=1.0, negative=False):
+    if view_data.base_8bit_array is None:
         return
-    new_adj = apply_brightness_contrast(vd.base_8bit_array, brightness, contrast, negative)
-    if new_adj is not None:
-        vd.adjusted_array = new_adj
-        vd.qimage = convert_numpy_to_qimage(vd.adjusted_array)
+    reusable = view_data.adjusted_array
+    if reusable is view_data.base_8bit_array:
+        reusable = None
+    view_data.adjusted_array = apply_brightness_contrast(
+        view_data.base_8bit_array,
+        brightness,
+        contrast,
+        negative,
+        out=reusable if (brightness != 0 or contrast != 1.0 or negative) else None,
+    )
+    view_data.qimage = convert_numpy_to_qimage(view_data.adjusted_array)
+
+
+def load_thumbnail_qimage(file_path, max_size=160):
+    """Decode one frame, immediately downsample it and release the full buffer."""
+    extension = os.path.splitext(file_path)[1].lower()
+    if extension in DICOM_EXTS:
+        dataset = _read_dicom_metadata(file_path)
+        if not _has_pixel_data(dataset):
+            raise InvalidMetadataError(file_path, "Нет пиксельных данных для превью")
+        full_array = _decode_dicom_frame(file_path, dataset, 0)
+        preview_array = downsample_array(np.asarray(full_array), max_size=max_size)
+        del full_array
+        gc.collect()
+        if preview_array is None:
+            return None
+        wc = _safe_float(_first_value(dataset.get("WindowCenter")), None, file_path, "WindowCenter")
+        ww = _safe_float(_first_value(dataset.get("WindowWidth")), None, file_path, "WindowWidth")
+        slope = _safe_float(dataset.get("RescaleSlope"), 1.0, file_path, "RescaleSlope")
+        intercept = _safe_float(dataset.get("RescaleIntercept"), 0.0, file_path, "RescaleIntercept")
+        photometric = str(dataset.get("PhotometricInterpretation", "MONOCHROME2"))
+        display = apply_rescale_window(preview_array, slope, intercept, wc, ww, photometric)
+        del dataset, preview_array
+    elif extension in IMAGE_EXTS:
+        if not PIL_AVAILABLE:
+            return None
+        from PIL import Image as PILImage
+
+        with PILImage.open(file_path) as image:
+            image.thumbnail((max_size, max_size))
+            display = np.asarray(image.convert("RGB"))
+    elif extension in JSON_EXTS:
+        view_data = load_json_file(file_path)
+        preview_array = downsample_array(view_data.original_array, max_size=max_size)
+        display = normalize_image(preview_array)
+        del view_data, preview_array
+    else:
+        return None
+
+    qimage = convert_numpy_to_qimage(np.ascontiguousarray(display))
+    del display
+    gc.collect()
+    return qimage

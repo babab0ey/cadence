@@ -12,13 +12,18 @@ from core.workspace_manager import (
 )
 from core.utils import SUPPORTED_EXTS, DICOM_EXTS, IMAGE_EXTS, JSON_EXTS, PIL_AVAILABLE, convert_numpy_to_qimage
 from core.image_loader import load_generic_file, apply_adjustments_pipeline, update_brightness_contrast_only
-from core.image_processor import apply_brightness_contrast
+from core.errors import ViewerError, wrap_unexpected_error
+from core.logging_config import get_log_file, get_logger
+from core.tasks import FileLoadTask
 from models.view_data import ViewData
 from tools.tool_manager import ToolManager
 from ui.viewport import InteractiveGraphicsView
 from ui.sidebar import SidebarWidget
 from ui.top_toolbar import TopToolbar
 from ui.overlays import clear_overlay_items, update_image_overlay
+
+
+logger = get_logger("main_window")
 
 
 class DICOMViewer(QtWidgets.QMainWindow):
@@ -45,6 +50,15 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.current_mode_index = 0
         self.all_scenes = []
         self.all_views = []
+        self.load_pool = QtCore.QThreadPool(self)
+        # Two simultaneous decoders keep the interface responsive without
+        # multiplying the peak memory of four large mammography images.
+        self.load_pool.setMaxThreadCount(2)
+        self._next_load_token = 0
+        self._pending_loads = {}
+        self._active_load_token_by_view = {}
+        self._batch_load_id = 0
+        self._batch_load_state = None
 
         self._setup_central_widget()
         self._create_view_widgets()
@@ -143,8 +157,11 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 vd.wc, vd.ww = preset_val
             else:
                 vd.wc, vd.ww = None, None
-            apply_adjustments_pipeline(vd, self.brightness, self.contrast, self.negative_mode)
-            self._update_single_view_display(idx)
+            try:
+                apply_adjustments_pipeline(vd, self.brightness, self.contrast, self.negative_mode)
+                self._update_single_view_display(idx)
+            except BaseException as exc:
+                self._show_load_error(wrap_unexpected_error(exc, vd.file_path or ""))
 
     def _undo_action(self):
         if 0 <= self.last_active_view_index < MAX_VIEWS:
@@ -343,23 +360,23 @@ class DICOMViewer(QtWidgets.QMainWindow):
         if dropped_file_path not in self.sidebar.extra_files:
             return
         file_currently_in_view = self.view_data[target_idx].file_path
-        if file_currently_in_view and os.path.exists(file_currently_in_view):
-            try:
-                index_of_dropped_file = self.sidebar.extra_files.index(dropped_file_path)
-                self.sidebar.extra_files[index_of_dropped_file] = file_currently_in_view
-            except ValueError:
+
+        def finalize_sidebar_drop(view_index, _view_data):
+            if dropped_file_path not in self.sidebar.extra_files:
+                return
+            if file_currently_in_view and os.path.exists(file_currently_in_view):
+                try:
+                    dropped_index = self.sidebar.extra_files.index(dropped_file_path)
+                    self.sidebar.extra_files[dropped_index] = file_currently_in_view
+                except ValueError:
+                    self.sidebar.extra_files.append(file_currently_in_view)
+            else:
                 self.sidebar.extra_files.remove(dropped_file_path)
-                self.sidebar.extra_files.append(file_currently_in_view)
-        else:
-            self.sidebar.extra_files.remove(dropped_file_path)
-        self._clear_view_data(target_idx)
-        if self._load_generic_file(dropped_file_path, target_idx):
             self.set_active_view(self.all_views[target_idx])
             QtCore.QTimer.singleShot(50, lambda: self._update_image_overlay(target_idx))
-        else:
-            QtWidgets.QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить файл: {dropped_file_path}")
-            return
-        self.sidebar.update_sidebar()
+            self.sidebar.update_sidebar()
+
+        self._start_file_load(dropped_file_path, target_idx, on_success=finalize_sidebar_drop)
 
     def _handle_main_view_to_sidebar_drop(self, source_view_idx, source_file_path):
         if self.view_data[source_view_idx].file_path != source_file_path:
@@ -387,13 +404,12 @@ class DICOMViewer(QtWidgets.QMainWindow):
         file_name, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, f"Открыть файл для окна {view_index + 1}", last_dir, ";;".join(filter_parts))
         if file_name:
-            self._clear_view_data(view_index)
-            if self._load_generic_file(file_name, view_index):
+            def on_loaded(_index, _view_data):
                 self.set_active_view(self.all_views[view_index])
-            else:
-                self._update_single_view_display(view_index)
-            self.sidebar.extra_files.clear()
-            self.sidebar.update_sidebar()
+                self.sidebar.extra_files.clear()
+                self.sidebar.update_sidebar()
+
+            self._start_file_load(file_name, view_index, on_success=on_loaded)
 
     def open_folder(self, start_path=None):
         if not start_path:
@@ -477,39 +493,157 @@ class DICOMViewer(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self.sidebar.update_sidebar)
 
     def _load_files_into_views(self, files_to_load):
-        loaded_count = 0
-        first_loaded_index = -1
+        self._batch_load_id += 1
+        batch_id = self._batch_load_id
+        self._batch_load_state = {
+            "id": batch_id,
+            "remaining": min(len(files_to_load), MAX_VIEWS),
+            "loaded": 0,
+            "first_loaded_index": -1,
+        }
+        if self._batch_load_state["remaining"] == 0:
+            return
+
         for i, file_path in enumerate(files_to_load):
             if i >= MAX_VIEWS:
                 break
-            view_index = i
-            if self._load_generic_file(file_path, view_index):
-                loaded_count += 1
-                if first_loaded_index == -1:
-                    first_loaded_index = view_index
-        if first_loaded_index != -1:
-            self.set_active_view(self.all_views[first_loaded_index])
-            self._update_visible_views_display()
-        elif loaded_count == 0 and len(files_to_load) > 0:
-            QtWidgets.QMessageBox.warning(self, "Ошибка загрузки", "Не удалось загрузить ни один из приоритетных файлов.")
+            self._start_file_load(
+                file_path,
+                i,
+                on_success=lambda view_index, view_data, bid=batch_id: self._on_batch_file_finished(
+                    bid, view_index, True
+                ),
+                on_failure=lambda view_index, error, bid=batch_id: self._on_batch_file_finished(
+                    bid, view_index, False
+                ),
+            )
+
+    def _on_batch_file_finished(self, batch_id, view_index, succeeded):
+        state = self._batch_load_state
+        if not state or state["id"] != batch_id:
+            return
+        state["remaining"] -= 1
+        if succeeded:
+            state["loaded"] += 1
+            if state["first_loaded_index"] == -1:
+                state["first_loaded_index"] = view_index
+                self.set_active_view(self.all_views[view_index])
+        if state["remaining"] == 0:
+            if state["first_loaded_index"] != -1:
+                self._update_visible_views_display()
+            elif state["loaded"] == 0:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Не удалось открыть исследование",
+                    "Ни один из выбранных снимков не удалось открыть. Подробности сохранены в журнале.",
+                )
+            self._batch_load_state = None
 
     def _load_generic_file(self, file_path, view_index):
+        """Synchronous compatibility path used by tests and non-UI callers."""
         if not (0 <= view_index < MAX_VIEWS):
-            return False
-        if not file_path or not os.path.exists(file_path):
             return False
         try:
             vd = load_generic_file(file_path)
-            if vd is None:
-                return False
-            self.view_data[view_index] = vd
             apply_adjustments_pipeline(vd, self.brightness, self.contrast, self.negative_mode)
+            self._clear_view_data(view_index)
+            self.view_data[view_index] = vd
             self._update_single_view_display(view_index)
             return True
-        except RuntimeError as e:
-            QtWidgets.QMessageBox.critical(self, "Ошибка загрузки", str(e))
-            self._clear_view_data(view_index)
+        except BaseException as exc:
+            error = wrap_unexpected_error(exc, file_path)
+            self._show_load_error(error)
             return False
+
+    def _start_file_load(self, file_path, view_index, on_success=None, on_failure=None, frame_index=0):
+        if not (0 <= view_index < MAX_VIEWS):
+            return None
+        self._next_load_token += 1
+        token = self._next_load_token
+        previous_token = self._active_load_token_by_view.get(view_index)
+        if previous_token in self._pending_loads:
+            self._pending_loads[previous_token]["cancelled"] = True
+
+        task = FileLoadTask(
+            token,
+            file_path,
+            frame_index=frame_index,
+            brightness=self.brightness,
+            contrast=self.contrast,
+            negative=self.negative_mode,
+        )
+        task.signals.succeeded.connect(self._on_file_load_succeeded)
+        task.signals.failed.connect(self._on_file_load_failed)
+        self._pending_loads[token] = {
+            "task": task,
+            "file_path": file_path,
+            "view_index": view_index,
+            "on_success": on_success,
+            "on_failure": on_failure,
+            "cancelled": False,
+        }
+        self._active_load_token_by_view[view_index] = token
+        self.all_views[view_index].set_loading(True)
+        logger.info("Фоновая загрузка поставлена в очередь: %s", file_path)
+        self.load_pool.start(task)
+        return token
+
+    @QtCore.pyqtSlot(int, object)
+    def _on_file_load_succeeded(self, token, view_data):
+        context = self._pending_loads.pop(token, None)
+        if context is None:
+            return
+        view_index = context["view_index"]
+        if context["cancelled"] or self._active_load_token_by_view.get(view_index) != token:
+            return
+        self._active_load_token_by_view.pop(view_index, None)
+        try:
+            self._clear_view_data(view_index)
+            self.view_data[view_index] = view_data
+            self._update_single_view_display(view_index)
+            self.all_views[view_index].set_loading(False)
+            callback = context.get("on_success")
+            if callback:
+                callback(view_index, view_data)
+            logger.info("Файл успешно открыт: %s", context["file_path"])
+        except BaseException as exc:
+            self.all_views[view_index].set_loading(False)
+            error = wrap_unexpected_error(exc, context["file_path"])
+            self._show_load_error(error)
+            callback = context.get("on_failure")
+            if callback:
+                callback(view_index, error)
+
+    @QtCore.pyqtSlot(int, object)
+    def _on_file_load_failed(self, token, error):
+        context = self._pending_loads.pop(token, None)
+        if context is None:
+            return
+        view_index = context["view_index"]
+        if context["cancelled"] or self._active_load_token_by_view.get(view_index) != token:
+            return
+        self._active_load_token_by_view.pop(view_index, None)
+        self.all_views[view_index].set_loading(False)
+        self._show_load_error(error)
+        callback = context.get("on_failure")
+        if callback:
+            callback(view_index, error)
+
+    def _show_load_error(self, error):
+        error = wrap_unexpected_error(error, getattr(error, "file_path", ""))
+        cause = getattr(error, "cause", None)
+        exc_info = (type(cause), cause, cause.__traceback__) if cause is not None else None
+        logger.error("Ошибка открытия: %s", error, exc_info=exc_info)
+
+        message = QtWidgets.QMessageBox(self)
+        message.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        message.setWindowTitle(error.user_title)
+        message.setText(error.user_message)
+        message.setInformativeText("Подробности сохранены в журнале приложения.")
+        log_file = get_log_file()
+        if log_file is not None:
+            message.setDetailedText(f"Журнал: {log_file}\nКод ошибки: {error.code}")
+        message.exec()
 
     def _update_single_view_display(self, view_index):
         if not (0 <= view_index < MAX_VIEWS):
@@ -519,36 +653,45 @@ class DICOMViewer(QtWidgets.QMainWindow):
         vd = self.view_data[view_index]
 
         old_pixmap_item = vd.pixmap_item
-        if old_pixmap_item and old_pixmap_item.scene() == scene:
-            try:
-                scene.removeItem(old_pixmap_item)
-            except Exception:
-                pass
-        clear_overlay_items(scene, vd)
-        view.set_image_data(None, 1.0, None)
-
         qimg = vd.qimage
         if qimg and not qimg.isNull():
-            from PyQt6 import QtGui
+            if old_pixmap_item and old_pixmap_item.scene() == scene:
+                try:
+                    scene.removeItem(old_pixmap_item)
+                except Exception:
+                    pass
+            clear_overlay_items(scene, vd)
+            view.set_image_data(None, 1.0, None)
             pixmap = QtGui.QPixmap.fromImage(qimg)
+            vd.qimage = None
+            del qimg
             if pixmap.isNull():
                 scene.setSceneRect(QtCore.QRectF(0, 0, 1, 1))
+                gc.collect()
                 return
-            new_pixmap_item = scene.addPixmap(pixmap)
-            vd.pixmap_item = new_pixmap_item
-            view.set_image_data(vd.adjusted_array, vd.pixel_spacing, new_pixmap_item)
-            new_pixmap_item.setZValue(0)
-            self._apply_item_transformations(view_index)
-            scene_rect = new_pixmap_item.sceneBoundingRect()
-            scene.setSceneRect(scene_rect)
-            if view.isVisible():
-                view.fitInView(scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
-                view.update_overlay_scaling()
-                QtCore.QTimer.singleShot(10, lambda: self._update_image_overlay(view_index))
+            pixmap_item = scene.addPixmap(pixmap)
+            vd.pixmap_item = pixmap_item
+            del pixmap
+            gc.collect()
+        elif old_pixmap_item and old_pixmap_item.scene() == scene:
+            pixmap_item = old_pixmap_item
         else:
+            clear_overlay_items(scene, vd)
+            view.set_image_data(None, 1.0, None)
             scene.setSceneRect(QtCore.QRectF(0, 0, 1, 1))
             if view.isVisible():
                 view.resetTransform()
+            return
+
+        view.set_image_data(vd.adjusted_array, vd.pixel_spacing, pixmap_item)
+        pixmap_item.setZValue(0)
+        self._apply_item_transformations(view_index)
+        scene_rect = pixmap_item.sceneBoundingRect()
+        scene.setSceneRect(scene_rect)
+        if view.isVisible():
+            view.fitInView(scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
+            view.update_overlay_scaling()
+            QtCore.QTimer.singleShot(10, lambda: self._update_image_overlay(view_index))
 
     def _update_visible_views_display(self):
         for i, view in enumerate(self.all_views):
@@ -565,13 +708,17 @@ class DICOMViewer(QtWidgets.QMainWindow):
                              self.is_dark_theme, self.brightness, self.contrast, self.negative_mode)
 
     def _update_adjustments(self):
-        for i in range(MAX_VIEWS):
-            vd = self.view_data[i]
-            if vd.base_8bit_array is not None:
-                update_brightness_contrast_only(vd, self.brightness, self.contrast, self.negative_mode)
-                if self.all_views[i]:
-                    self.all_views[i].set_image_data(vd.adjusted_array, vd.pixel_spacing, vd.pixmap_item)
-        self._update_visible_views_display()
+        try:
+            for i in range(MAX_VIEWS):
+                vd = self.view_data[i]
+                if vd.base_8bit_array is not None:
+                    update_brightness_contrast_only(vd, self.brightness, self.contrast, self.negative_mode)
+                    if self.all_views[i]:
+                        self.all_views[i].set_image_data(vd.adjusted_array, vd.pixel_spacing, vd.pixmap_item)
+            self._update_visible_views_display()
+        except BaseException as exc:
+            active = self.view_data[self.last_active_view_index]
+            self._show_load_error(wrap_unexpected_error(exc, active.file_path or ""))
 
     def _apply_item_transformations(self, view_index):
         vd = self.view_data[view_index]
@@ -639,14 +786,23 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.view_data[view_index] = ViewData()
         view.viewport().update()
 
+    def _cancel_pending_load(self, view_index):
+        token = self._active_load_token_by_view.pop(view_index, None)
+        if token in self._pending_loads:
+            self._pending_loads[token]["cancelled"] = True
+        if 0 <= view_index < len(self.all_views):
+            self.all_views[view_index].set_loading(False)
+
     def clear_active_view_data(self):
         idx = self.last_active_view_index
         if 0 <= idx < MAX_VIEWS:
+            self._cancel_pending_load(idx)
             self._clear_view_data(idx)
             self._update_single_view_display(idx)
 
     def clear_all_views_data(self):
         for i in range(MAX_VIEWS):
+            self._cancel_pending_load(i)
             self._clear_view_data(i)
         self.sidebar.extra_files.clear()
         self.sidebar.update_sidebar()
@@ -923,3 +1079,14 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 event.acceptProposedAction()
                 return
         event.ignore()
+
+    def closeEvent(self, event):
+        for view_index in range(MAX_VIEWS):
+            self._cancel_pending_load(view_index)
+        self.load_pool.clear()
+        if not self.load_pool.waitForDone(3000):
+            logger.warning("Фоновые задачи не успели завершиться перед закрытием")
+        self.sidebar.thumbnail_pool.clear()
+        if not self.sidebar.thumbnail_pool.waitForDone(1000):
+            logger.warning("Задачи превью не успели завершиться перед закрытием")
+        super().closeEvent(event)

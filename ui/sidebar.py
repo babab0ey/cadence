@@ -3,15 +3,18 @@ import re
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import Qt
 from core.utils import DICOM_EXTS, IMAGE_EXTS, PIL_AVAILABLE
+from core.tasks import ThumbnailLoadTask
 
 
 class ThumbnailWidget(QtWidgets.QFrame):
     """Claude-style thumbnail card: rounded, soft hover, small label."""
     fileClicked = QtCore.pyqtSignal(str)
 
-    def __init__(self, file_path, parent=None):
+    def __init__(self, file_path, thumbnail_pool=None, parent=None):
         super().__init__(parent)
         self.file_path = file_path
+        self.thumbnail_pool = thumbnail_pool or QtCore.QThreadPool.globalInstance()
+        self._thumbnail_task = None
         self.setObjectName("thumbnailItem")
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -56,27 +59,37 @@ class ThumbnailWidget(QtWidgets.QFrame):
             except Exception:
                 self.thumbnail_label.setText("DICOM")
         elif ext in IMAGE_EXTS and PIL_AVAILABLE:
-            try:
-                from PIL import Image
-                with Image.open(self.file_path) as img:
-                    img.thumbnail((160, 160))
-                    if img.mode == "RGB":
-                        r, g, b = img.split()
-                        img = Image.merge("RGB", (b, g, r))
-                    elif img.mode == "RGBA":
-                        r, g, b, a = img.split()
-                        img = Image.merge("RGBA", (b, g, r, a))
-                    if img.mode not in ["RGB", "RGBA"]:
-                        img = img.convert("RGBA")
-                    im2 = img.convert("RGBA")
-                    data = im2.tobytes("raw", "RGBA")
-                    qim = QtGui.QImage(data, img.width, img.height, QtGui.QImage.Format.Format_RGBA8888)
-                    pixmap = QtGui.QPixmap.fromImage(qim)
-                    self.thumbnail_label.setPixmap(pixmap)
-            except Exception:
-                self.thumbnail_label.setText("Image")
+            self.thumbnail_label.setText("Изображение")
         else:
             self.thumbnail_label.setText(ext.upper().replace(".", "") or "FILE")
+
+        task = ThumbnailLoadTask(self.file_path, max_size=160)
+        task.signals.succeeded.connect(self._on_thumbnail_loaded)
+        task.signals.failed.connect(self._on_thumbnail_failed)
+        self._thumbnail_task = task
+        self.thumbnail_pool.start(task)
+
+    @QtCore.pyqtSlot(str, object)
+    def _on_thumbnail_loaded(self, file_path, image):
+        if file_path != self.file_path or image is None or image.isNull():
+            return
+        pixmap = QtGui.QPixmap.fromImage(image)
+        if not pixmap.isNull():
+            self.thumbnail_label.setText("")
+            self.thumbnail_label.setPixmap(
+                pixmap.scaled(
+                    160,
+                    160,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        self._thumbnail_task = None
+
+    @QtCore.pyqtSlot(str)
+    def _on_thumbnail_failed(self, file_path):
+        if file_path == self.file_path:
+            self._thumbnail_task = None
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -133,6 +146,8 @@ class SidebarWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.setObjectName("sidebarRoot")
         self._extra_files = []
+        self.thumbnail_pool = QtCore.QThreadPool(self)
+        self.thumbnail_pool.setMaxThreadCount(2)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -295,7 +310,7 @@ class SidebarWidget(QtWidgets.QWidget):
         # Add thumbnails (limit to 200 for perf)
         limit = 200
         for file_path in visible_files[:limit]:
-            thumbnail = ThumbnailWidget(file_path)
+            thumbnail = ThumbnailWidget(file_path, self.thumbnail_pool)
             self.scroll_area_layout.addWidget(thumbnail)
 
         # Add a stretch at the bottom

@@ -4,10 +4,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6 import QtWidgets, QtGui, QtCore
+from core.logging_config import get_logger, install_exception_hooks, setup_logging
 from ui.main_window import DICOMViewer
 
 
 def main():
+    log_file = setup_logging()
+    logger = get_logger("main")
     # Fix encoding for stdout (Russian print statements)
     if hasattr(sys.stdout, 'reconfigure'):
         try:
@@ -17,6 +20,7 @@ def main():
 
     # High-DPI is enabled by default in PyQt6
     app = QtWidgets.QApplication(sys.argv)
+    install_exception_hooks()
     app.setApplicationName("Claude DICOM Viewer")
     app.setOrganizationName("Anthropic-Inspired")
 
@@ -53,6 +57,9 @@ def main():
 
     window = DICOMViewer()
     window.show()
+
+    logger.info("Приложение запущено; журнал: %s", log_file)
+    app.aboutToQuit.connect(lambda: logger.info("Приложение завершает работу"))
 
     sys.exit(app.exec())
 

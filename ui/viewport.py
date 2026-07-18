@@ -54,6 +54,24 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.view_data = None
         self.is_low_quality = False
 
+        self._loading_overlay = QtWidgets.QFrame(self.viewport())
+        self._loading_overlay.setObjectName("loadingOverlay")
+        self._loading_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        loading_layout = QtWidgets.QVBoxLayout(self._loading_overlay)
+        loading_layout.setContentsMargins(32, 32, 32, 32)
+        loading_layout.addStretch()
+        self._loading_label = QtWidgets.QLabel("Открываю снимок…")
+        self._loading_label.setObjectName("loadingLabel")
+        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading_layout.addWidget(self._loading_label)
+        self._loading_progress = QtWidgets.QProgressBar()
+        self._loading_progress.setRange(0, 0)
+        self._loading_progress.setTextVisible(False)
+        self._loading_progress.setMaximumWidth(220)
+        loading_layout.addWidget(self._loading_progress, alignment=Qt.AlignmentFlag.AlignHCenter)
+        loading_layout.addStretch()
+        self._loading_overlay.hide()
+
     @property
     def note_color(self):
         return self._note_tool.note_color
@@ -74,6 +92,17 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.is_low_quality = enabled
         self.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, not enabled)
         self.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, not enabled)
+
+    def set_loading(self, loading, text="Открываю снимок…"):
+        self._loading_label.setText(text)
+        self._loading_overlay.setGeometry(self.viewport().rect())
+        self._loading_overlay.setVisible(bool(loading))
+        if loading:
+            self._loading_overlay.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._loading_overlay.setGeometry(self.viewport().rect())
 
     def dragEnterEvent(self, event):
         mime_data = event.mimeData()

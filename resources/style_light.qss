@@ -911,3 +911,15 @@ QPushButton#chatStyleButton:checked {
 QGraphicsView[active="true"] {
     border: 1.5px solid #D97757;
 }
+
+QFrame#loadingOverlay {
+    background-color: rgba(250, 249, 245, 0.92);
+    border-radius: 10px;
+}
+
+QLabel#loadingLabel {
+    color: #3D3D3A;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 8px;
+}

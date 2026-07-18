@@ -86,3 +86,7 @@ class RulerTool:
         self.measure_line = None
         self.measure_text = None
         self.measure_start = None
+
+    def clear_temp(self, scene):
+        """Use the cleanup contract shared by the other drawing tools."""
+        self.cleanup(scene)

@@ -874,3 +874,15 @@ QPushButton#chatStyleButton:checked {
     background-color: #393937;
     color: #FAF9F5;
 }
+
+QFrame#loadingOverlay {
+    background-color: rgba(31, 31, 29, 0.92);
+    border-radius: 10px;
+}
+
+QLabel#loadingLabel {
+    color: #FAF9F5;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 8px;
+}
