@@ -5,7 +5,7 @@
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![PyQt6](https://img.shields.io/badge/UI-PyQt6-41CD52?logo=qt&logoColor=white)
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-64%20passing-4CAF82)
+[![Tests](https://github.com/babab0ey/cadence/actions/workflows/tests.yml/badge.svg)](https://github.com/babab0ey/cadence/actions/workflows/tests.yml)
 
 ![Главное окно просмотрщика](assets/screenshots/main-window-dark.png)
 
