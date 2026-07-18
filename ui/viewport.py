@@ -8,6 +8,94 @@ from tools.angle import AngleTool
 from tools.roi_shapes import RoiRectTool, RoiEllipseTool, PolygonTool
 from tools.pen import PenTool
 from tools.note import NoteTool
+from resources.design_tokens import GEOMETRY, theme_tokens
+
+
+class SkeletonOverlay(QtWidgets.QWidget):
+    """Theme-aware shimmer shown while a full-resolution image is decoded."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("skeletonOverlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._progress = 0.0
+        self._dark = False
+        self._text = "Открываю снимок…"
+        self._shimmer = QtCore.QPropertyAnimation(self, b"shimmerProgress", self)
+        self._shimmer.setStartValue(0.0)
+        self._shimmer.setEndValue(1.0)
+        self._shimmer.setDuration(1500)
+        self._shimmer.setLoopCount(-1)
+        self._shimmer.setEasingCurve(QtCore.QEasingCurve.Type.InOutSine)
+        self._opacity = QtWidgets.QGraphicsOpacityEffect(self)
+        self._opacity.setOpacity(1.0)
+        self.setGraphicsEffect(self._opacity)
+        self._fade = QtCore.QPropertyAnimation(self._opacity, b"opacity", self)
+        self._fade.setDuration(GEOMETRY["transition_fast"])
+        self._fade.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        self._fade.finished.connect(self._finish_fade)
+        self.hide()
+
+    @QtCore.pyqtProperty(float)
+    def shimmerProgress(self):
+        return self._progress
+
+    @shimmerProgress.setter
+    def shimmerProgress(self, value):
+        self._progress = float(value)
+        self.update()
+
+    def set_theme(self, dark):
+        self._dark = bool(dark)
+        self.update()
+
+    def start(self, text="Открываю снимок…"):
+        self._text = text
+        self._fade.stop()
+        self._opacity.setOpacity(1.0)
+        self.show()
+        self.raise_()
+        if self._shimmer.state() != QtCore.QAbstractAnimation.State.Running:
+            self._shimmer.start()
+
+    def stop(self):
+        if not self.isVisible():
+            return
+        self._fade.stop()
+        self._fade.setStartValue(self._opacity.opacity())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+
+    def _finish_fade(self):
+        if self._opacity.opacity() <= 0.01:
+            self.hide()
+            self._shimmer.stop()
+
+    def paintEvent(self, _event):
+        tokens = theme_tokens(self._dark)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), QtGui.QColor(tokens["viewer_bg"]))
+        margin_x = max(24, int(self.width() * 0.08))
+        margin_y = max(24, int(self.height() * 0.08))
+        card = self.rect().adjusted(margin_x, margin_y, -margin_x, -margin_y)
+        base = QtGui.QColor(tokens["skeleton"])
+        highlight = QtGui.QColor(tokens["skeleton_highlight"])
+        band = max(100, int(card.width() * 0.22))
+        center = card.left() - band + int((card.width() + band * 2) * self._progress)
+        gradient = QtGui.QLinearGradient(center - band, 0, center + band, 0)
+        gradient.setColorAt(0.0, base)
+        gradient.setColorAt(0.5, highlight)
+        gradient.setColorAt(1.0, base)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(gradient)
+        painter.drawRoundedRect(QtCore.QRectF(card), GEOMETRY["radius_lg"], GEOMETRY["radius_lg"])
+        font = painter.font()
+        font.setPixelSize(GEOMETRY["font_base"])
+        font.setWeight(QtGui.QFont.Weight.Medium)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor("#F5F3EF"))
+        painter.drawText(card.adjusted(0, 0, 0, -20), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, self._text)
 
 
 class InteractiveGraphicsView(QtWidgets.QGraphicsView):
@@ -62,23 +150,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.view_data = None
         self.is_low_quality = False
 
-        self._loading_overlay = QtWidgets.QFrame(self.viewport())
-        self._loading_overlay.setObjectName("loadingOverlay")
-        self._loading_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        loading_layout = QtWidgets.QVBoxLayout(self._loading_overlay)
-        loading_layout.setContentsMargins(32, 32, 32, 32)
-        loading_layout.addStretch()
-        self._loading_label = QtWidgets.QLabel("Открываю снимок…")
-        self._loading_label.setObjectName("loadingLabel")
-        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        loading_layout.addWidget(self._loading_label)
-        self._loading_progress = QtWidgets.QProgressBar()
-        self._loading_progress.setRange(0, 0)
-        self._loading_progress.setTextVisible(False)
-        self._loading_progress.setMaximumWidth(220)
-        loading_layout.addWidget(self._loading_progress, alignment=Qt.AlignmentFlag.AlignHCenter)
-        loading_layout.addStretch()
-        self._loading_overlay.hide()
+        self._loading_overlay = SkeletonOverlay(self.viewport())
 
         self._current_frame_index = 0
         self._frame_count = 1
@@ -143,11 +215,14 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, not enabled)
 
     def set_loading(self, loading, text="Открываю снимок…"):
-        self._loading_label.setText(text)
         self._loading_overlay.setGeometry(self.viewport().rect())
-        self._loading_overlay.setVisible(bool(loading))
         if loading:
-            self._loading_overlay.raise_()
+            self._loading_overlay.start(text)
+        else:
+            self._loading_overlay.stop()
+
+    def apply_theme(self, dark):
+        self._loading_overlay.set_theme(dark)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

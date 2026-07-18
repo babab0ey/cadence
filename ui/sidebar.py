@@ -386,6 +386,10 @@ class SidebarWidget(QtWidgets.QWidget):
 
     def restore_state(self, width, collapsed=False):
         self._expanded_width = max(GEOMETRY["sidebar_min"], min(GEOMETRY["sidebar_max"], int(width)))
+        if collapsed:
+            # Mark the restored transition as already collapsed so its stored
+            # expanded width is not replaced by the splitters' startup width.
+            self._collapsed = True
         self.set_collapsed(bool(collapsed), animate=False)
         if not collapsed:
             self.resize(self._expanded_width, self.height())
@@ -401,7 +405,7 @@ class SidebarWidget(QtWidgets.QWidget):
         collapsed = bool(collapsed)
         if collapsed == self._collapsed and animate:
             return
-        if collapsed:
+        if collapsed and not self._collapsed:
             self.remember_current_width()
         self._collapsed = collapsed
         self.title_label.setVisible(not collapsed)
