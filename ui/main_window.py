@@ -35,9 +35,11 @@ logger = get_logger("main_window")
 
 
 class DICOMViewer(QtWidgets.QMainWindow):
+    WINDOW_TITLE = "Просмотр снимков"
+
     def __init__(self, settings=None):
         super().__init__()
-        self.setWindowTitle("Claude DICOM Viewer")
+        self.setWindowTitle(self.WINDOW_TITLE)
         self.resize(1300, 950)
         self._minimum_ui_size = QtCore.QSize(900, 600)
         self._settings_enabled = settings is not False
@@ -46,6 +48,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
             if self._settings_enabled and settings is not None
             else QtCore.QSettings() if self._settings_enabled else None
         )
+        self._welcome_pending = bool(self._settings_enabled and not self.settings.allKeys())
+        self._welcome_scheduled = False
+        self._is_closing = False
+        self._study_title_context_active = False
         self.last_opened_folder = ""
         self.brightness = 0
         self.contrast = 1.0
@@ -158,6 +164,63 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self.setMinimumSize(self._minimum_ui_size)
         install_button_interactions(self, self.is_dark_theme)
         super().showEvent(event)
+        if self._welcome_pending and not self._welcome_scheduled:
+            self._welcome_scheduled = True
+            QtCore.QTimer.singleShot(500, self._show_first_run_welcome)
+
+    def _show_first_run_welcome(self):
+        if self._is_closing or not self.isVisible() or not self._welcome_pending:
+            return
+        self._welcome_pending = False
+        if self._settings_enabled:
+            self.settings.setValue("onboarding/welcome_shown", True)
+            self.settings.sync()
+        self._notify(
+            "info",
+            "Добро пожаловать!",
+            "Нажмите «Открыть папку», чтобы загрузить снимки.",
+            duration=6500,
+        )
+
+    @staticmethod
+    def _short_patient_name(value):
+        text = re.sub(r"\s+", " ", str(value or "").replace("^", " ")).strip()
+        if text.casefold() in {"", "n/a", "none", "неизвестно", "—"}:
+            return ""
+        parts = text.split()
+        if len(parts) == 1:
+            return parts[0]
+        initials = "".join(f"{part[0].upper()}." for part in parts[1:3] if part)
+        return f"{parts[0]} {initials}".strip()
+
+    @staticmethod
+    def _display_study_date(value):
+        text = str(value or "").strip()
+        digits = re.sub(r"\D", "", text)
+        if len(digits) == 8:
+            if digits[:4].isdigit() and 1900 <= int(digits[:4]) <= 2200:
+                return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+            return f"{digits[4:]}-{digits[2:4]}-{digits[:2]}"
+        return text if text.casefold() not in {"", "n/a", "none", "—"} else ""
+
+    def _update_window_title(self):
+        parts = []
+        if self._study_title_context_active:
+            loaded = next((item for item in self.view_data if item.file_path), None)
+            if loaded is not None:
+                patient = self._short_patient_name(loaded.patient_name)
+                date = self._display_study_date(loaded.study_date)
+                if patient:
+                    parts.append(patient)
+                if date:
+                    parts.append(date)
+                if not parts and loaded.study_description not in ("", "N/A", "—"):
+                    parts.append(str(loaded.study_description))
+            if not parts and self.last_opened_folder:
+                folder_name = os.path.basename(os.path.normpath(self.last_opened_folder))
+                if folder_name:
+                    parts.append(folder_name)
+        self.setWindowTitle(" — ".join((self.WINDOW_TITLE, *parts)))
 
     @staticmethod
     def _resolved_dark_theme(theme_mode):
@@ -185,6 +248,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         # Sidebar
         self.sidebar = SidebarWidget()
         self.sidebar.viewSwapToSidebar.connect(self._handle_main_view_to_sidebar_drop)
+        self.sidebar.externalPathsDropped.connect(self._handle_external_drop_paths)
         self.sidebar.fileActivated.connect(
             lambda path: self._start_file_load(path, self.last_active_view_index)
         )
@@ -566,6 +630,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.singleViewToggleRequested.connect(self._toggle_single_view_for_view)
             view.viewDropOccurred.connect(self.swap_view_data)
             view.sidebarFileDropped.connect(self._handle_sidebar_drop)
+            view.externalPathsDropped.connect(self._handle_external_drop_paths)
             view.windowLevelStarted.connect(self._on_window_level_started)
             view.windowLevelChanged.connect(self._on_window_level_changed)
             view.windowLevelFinished.connect(self._on_window_level_finished)
@@ -757,6 +822,13 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self._start_file_load(file_name, view_index, on_success=on_loaded)
 
     def open_folder(self, start_path=None):
+        if start_path and not os.path.isdir(start_path):
+            self._notify(
+                "warning",
+                "Папка не найдена",
+                "Проверьте, что папка существует, и попробуйте открыть её снова.",
+            )
+            return
         if not start_path:
             last_dir = self._default_open_directory()
             options = QtWidgets.QFileDialog.Option.ShowDirsOnly
@@ -764,12 +836,16 @@ class DICOMViewer(QtWidgets.QMainWindow):
         else:
             folder_path = start_path
         if folder_path:
-            self.last_opened_folder = folder_path
+            self.last_opened_folder = os.path.abspath(folder_path)
+            self._study_title_context_active = True
+            self._update_window_title()
             all_files_in_folder = []
             files_by_ext = scan_folder_for_files(folder_path)
             for ext_list in files_by_ext.values():
                 all_files_in_folder.extend(ext_list)
             if not all_files_in_folder:
+                self._study_title_context_active = False
+                self._update_window_title()
                 self._notify("info", "Файлы не найдены", "В выбранной папке нет поддерживаемых снимков.")
                 return
             dicom_files = []
@@ -782,6 +858,9 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 selected_files = self._show_format_selection_dialog(files_by_ext)
                 if selected_files:
                     self.load_files(selected_files)
+                else:
+                    self._study_title_context_active = False
+                    self._update_window_title()
 
     def _show_format_selection_dialog(self, files_by_ext):
         from ui.dialogs.base_dialog import ClaudeDialog
@@ -823,9 +902,14 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def load_files(self, file_paths):
         if not file_paths:
             return
+        first_file = os.path.abspath(file_paths[0])
+        if not self._study_title_context_active or not self.last_opened_folder:
+            self.last_opened_folder = os.path.dirname(first_file)
+        self._study_title_context_active = True
+        self._update_window_title()
         sorted_files = sort_files_for_mammo(file_paths)
         files_for_main, _files_beyond_first_views = distribute_files(sorted_files)
-        self.clear_all_views_data()
+        self.clear_all_views_data(preserve_title_context=True)
         # The sidebar is a folder catalogue, not an overflow bucket. Active
         # files remain visible so the user always sees the complete study.
         self.sidebar.extra_files = list(sorted_files)
@@ -893,6 +977,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self._clear_view_data(view_index)
             self.view_data[view_index] = vd
             self._update_single_view_display(view_index)
+            self._study_title_context_active = True
+            self._update_window_title()
             return True
         except BaseException as exc:
             error = wrap_unexpected_error(exc, file_path)
@@ -909,7 +995,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         window_level_override=None,
         preserve_existing_view=False,
     ):
-        if not (0 <= view_index < MAX_VIEWS):
+        if self._is_closing or not (0 <= view_index < MAX_VIEWS):
             return None
         self._next_load_token += 1
         token = self._next_load_token
@@ -960,6 +1046,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
         context = self._pending_loads.pop(token, None)
         if context is None:
             return
+        if self._is_closing:
+            return
         view_index = context["view_index"]
         if context["cancelled"] or self._active_load_token_by_view.get(view_index) != token:
             return
@@ -972,6 +1060,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 view_data.flip_v = preserved_view_state["flip_v"]
             self._clear_view_data(view_index)
             self.view_data[view_index] = view_data
+            self._study_title_context_active = True
+            self._update_window_title()
             self._update_single_view_display(
                 view_index,
                 preserve_view=preserved_view_state is not None,
@@ -995,6 +1085,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def _on_file_load_failed(self, token, error):
         context = self._pending_loads.pop(token, None)
         if context is None:
+            return
+        if self._is_closing:
             return
         view_index = context["view_index"]
         if context["cancelled"] or self._active_load_token_by_view.get(view_index) != token:
@@ -1363,8 +1455,11 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self._cancel_pending_load(idx)
             self._clear_view_data(idx)
             self._update_single_view_display(idx)
+            if not any(item.file_path for item in self.view_data):
+                self._study_title_context_active = False
+            self._update_window_title()
 
-    def clear_all_views_data(self):
+    def clear_all_views_data(self, preserve_title_context=False):
         for i in range(MAX_VIEWS):
             self._cancel_pending_load(i)
             self._clear_view_data(i)
@@ -1374,6 +1469,9 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.contrast = 1.0
         self.negative_mode = False
         self.last_active_view_index = 0
+        if not preserve_title_context:
+            self._study_title_context_active = False
+        self._update_window_title()
         if hasattr(self.toolbar, 'tool_actions') and ToolManager.TOOL_NONE in self.toolbar.tool_actions:
             self.toolbar.tool_actions[ToolManager.TOOL_NONE].setChecked(True)
             self.set_tool_for_visible_views(ToolManager.TOOL_NONE)
@@ -1612,18 +1710,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def dragEnterEvent(self, event):
         mime_data = event.mimeData()
         if mime_data.hasUrls():
-            has_supported_files = False
-            for url in mime_data.urls():
-                if url.isLocalFile():
-                    path = url.toLocalFile()
-                    if os.path.isdir(path):
-                        has_supported_files = True
-                        break
-                    elif os.path.isfile(path):
-                        ext = os.path.splitext(path)[1].lower()
-                        if ext in SUPPORTED_EXTS:
-                            has_supported_files = True
-                            break
+            has_supported_files = any(
+                url.isLocalFile() and self._is_supported_drop_path(url.toLocalFile())
+                for url in mime_data.urls()
+            )
             if has_supported_files:
                 event.acceptProposedAction()
             else:
@@ -1631,41 +1721,102 @@ class DICOMViewer(QtWidgets.QMainWindow):
         else:
             event.ignore()
 
+    @staticmethod
+    def _is_supported_drop_path(path):
+        if os.path.isdir(path):
+            return True
+        return os.path.isfile(path) and os.path.splitext(path)[1].lower() in SUPPORTED_EXTS
+
+    def _collect_external_drop_files(self, paths):
+        directories = []
+        direct_files = []
+        for raw_path in paths:
+            path = os.path.abspath(os.fspath(raw_path))
+            if os.path.isdir(path):
+                directories.append(path)
+            elif os.path.isfile(path) and os.path.splitext(path)[1].lower() in SUPPORTED_EXTS:
+                direct_files.append(path)
+                directories.append(os.path.dirname(path))
+
+        collected = []
+        seen = set()
+        for directory in dict.fromkeys(directories):
+            files_by_ext = scan_folder_for_files(directory)
+            for file_group in files_by_ext.values():
+                for file_path in file_group:
+                    normalized = os.path.normcase(os.path.abspath(file_path))
+                    if normalized not in seen:
+                        seen.add(normalized)
+                        collected.append(file_path)
+        for file_path in direct_files:
+            normalized = os.path.normcase(file_path)
+            if normalized not in seen:
+                seen.add(normalized)
+                collected.append(file_path)
+        return collected
+
+    @QtCore.pyqtSlot(list)
+    def _handle_external_drop_paths(self, paths):
+        if self._is_closing:
+            return
+        existing_paths = [os.path.abspath(os.fspath(path)) for path in paths if os.path.exists(path)]
+        if not existing_paths:
+            self._notify(
+                "warning",
+                "Файл или папка не найдены",
+                "Проверьте расположение и попробуйте перетащить данные ещё раз.",
+            )
+            return
+        files_to_load = self._collect_external_drop_files(existing_paths)
+        if not files_to_load:
+            self._notify(
+                "info",
+                "Снимки не найдены",
+                "В перетащённой папке нет поддерживаемых файлов.",
+            )
+            return
+        first_path = existing_paths[0]
+        self.last_opened_folder = first_path if os.path.isdir(first_path) else os.path.dirname(first_path)
+        self._study_title_context_active = True
+        self.load_files(files_to_load)
+
     def dropEvent(self, event):
         mime_data = event.mimeData()
         if mime_data.hasUrls():
-            files_to_load = []
-            for url in mime_data.urls():
-                if url.isLocalFile():
-                    path = url.toLocalFile()
-                    if os.path.isdir(path):
-                        try:
-                            for root, _, files in os.walk(path):
-                                for filename in files:
-                                    ext = os.path.splitext(filename)[1].lower()
-                                    if ext in SUPPORTED_EXTS:
-                                        full_path = os.path.join(root, filename)
-                                        files_to_load.append(full_path)
-                        except Exception as e:
-                            print(f"Ошибка сканирования папки {path}: {e}")
-                    elif os.path.isfile(path):
-                        ext = os.path.splitext(path)[1].lower()
-                        if ext in SUPPORTED_EXTS:
-                            files_to_load.append(path)
-            if files_to_load:
-                self.load_files(files_to_load)
+            paths = [url.toLocalFile() for url in mime_data.urls() if url.isLocalFile()]
+            if paths:
+                self._handle_external_drop_paths(paths)
                 event.acceptProposedAction()
                 return
         event.ignore()
 
     def closeEvent(self, event):
+        if self._is_closing:
+            event.accept()
+            return
+        self._is_closing = True
         self._save_settings()
+        self._window_level_render_timer.stop()
         for view_index in range(MAX_VIEWS):
             self._cancel_pending_load(view_index)
+        for context in tuple(self._pending_loads.values()):
+            task = context.get("task")
+            if task is None:
+                continue
+            for signal, slot in (
+                (task.signals.succeeded, self._on_file_load_succeeded),
+                (task.signals.failed, self._on_file_load_failed),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    pass
         self.load_pool.clear()
         if not self.load_pool.waitForDone(3000):
-            logger.warning("Фоновые задачи не успели завершиться перед закрытием")
-        self.sidebar.thumbnail_pool.clear()
-        if not self.sidebar.thumbnail_pool.waitForDone(1000):
-            logger.warning("Задачи превью не успели завершиться перед закрытием")
+            logger.info("Ожидание завершения активного декодирования перед закрытием")
+            self.load_pool.waitForDone(-1)
+        self._pending_loads.clear()
+        self._active_load_token_by_view.clear()
+        self._batch_load_state = None
+        self.sidebar.shutdown_background_tasks()
         super().closeEvent(event)

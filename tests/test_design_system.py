@@ -48,7 +48,10 @@ class DesignSystemTests(unittest.TestCase):
             series_description="Правая проекция",
         )
         dialog = DicomInfoDialog(0, vd, 1.0, 0, 1.0, False, False)
-        self.assertGreaterEqual(len(dialog.findChildren(PatientField)), 20)
+        fields = dialog.findChildren(PatientField)
+        self.assertGreaterEqual(len(fields), 20)
+        fields[0].copy_value()
+        self.assertEqual(self.app.clipboard().text(), fields[0].value_text)
         dialog.copy_all()
         copied = self.app.clipboard().text()
         self.assertIn("Пациент", copied)

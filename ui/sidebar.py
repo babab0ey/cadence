@@ -40,6 +40,7 @@ class StudyListModel(QtCore.QAbstractListModel):
         self.thumbnail_pool = QtCore.QThreadPool(self)
         self.thumbnail_pool.setMaxThreadCount(2)
         self._tasks = {}
+        self._shutting_down = False
 
     def rowCount(self, parent=QtCore.QModelIndex()):
         return 0 if parent.isValid() else len(self._entries)
@@ -89,6 +90,8 @@ class StudyListModel(QtCore.QAbstractListModel):
         self.endResetModel()
 
     def ensure_preview(self, row):
+        if self._shutting_down:
+            return
         if not (0 <= row < len(self._entries)):
             return
         entry = self._entries[row]
@@ -105,6 +108,8 @@ class StudyListModel(QtCore.QAbstractListModel):
 
     @QtCore.pyqtSlot(str, object, int)
     def _preview_ready(self, file_path, image, frame_count):
+        if self._shutting_down:
+            return
         row = self._row_by_path.get(file_path)
         self._tasks.pop(file_path, None)
         if row is None or row >= len(self._entries):
@@ -118,6 +123,8 @@ class StudyListModel(QtCore.QAbstractListModel):
 
     @QtCore.pyqtSlot(str, str)
     def _preview_failed(self, file_path, error):
+        if self._shutting_down:
+            return
         row = self._row_by_path.get(file_path)
         self._tasks.pop(file_path, None)
         if row is None or row >= len(self._entries):
@@ -127,6 +134,14 @@ class StudyListModel(QtCore.QAbstractListModel):
         entry.error = error
         index = self.index(row, 0)
         self.dataChanged.emit(index, index)
+
+    def shutdown(self):
+        """Drain preview work before the owning window is destroyed."""
+        self._shutting_down = True
+        self.thumbnail_pool.clear()
+        if not self.thumbnail_pool.waitForDone(1000):
+            self.thumbnail_pool.waitForDone(-1)
+        self._tasks.clear()
 
     def index_for_path(self, file_path):
         row = self._row_by_path.get(file_path, -1)
@@ -244,6 +259,7 @@ class StudyItemDelegate(QtWidgets.QStyledItemDelegate):
 
 class StudyListView(QtWidgets.QListView):
     viewDropped = QtCore.pyqtSignal(int, str)
+    externalPathsDropped = QtCore.pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -273,6 +289,12 @@ class StudyListView(QtWidgets.QListView):
             self.viewDropped.emit(int(match.group(1)), match.group(2))
             event.acceptProposedAction()
             return
+        if event.mimeData().hasUrls():
+            paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if paths:
+                self.externalPathsDropped.emit(paths)
+                event.acceptProposedAction()
+                return
         super().dropEvent(event)
 
 
@@ -281,6 +303,7 @@ class SidebarWidget(QtWidgets.QWidget):
     viewSwapToSidebar = QtCore.pyqtSignal(int, str)
     fileActivated = QtCore.pyqtSignal(str)
     collapsedChanged = QtCore.pyqtSignal(bool)
+    externalPathsDropped = QtCore.pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -344,6 +367,7 @@ class SidebarWidget(QtWidgets.QWidget):
         self.list_view.setModel(self.proxy_model)
         self.list_view.setItemDelegate(self.delegate)
         self.list_view.viewDropped.connect(self.viewSwapToSidebar)
+        self.list_view.externalPathsDropped.connect(self.externalPathsDropped)
         self.list_view.doubleClicked.connect(self._activate_index)
 
         self.empty_widget = QtWidgets.QWidget()
@@ -502,6 +526,10 @@ class SidebarWidget(QtWidgets.QWidget):
         if proxy.isValid():
             self.list_view.setCurrentIndex(proxy)
             self.list_view.scrollTo(proxy, QtWidgets.QAbstractItemView.ScrollHint.EnsureVisible)
+
+    def shutdown_background_tasks(self):
+        self._search_timer.stop()
+        self.model.shutdown()
 
     def apply_theme(self, dark):
         self._dark = bool(dark)

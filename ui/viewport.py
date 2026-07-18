@@ -200,6 +200,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     windowLevelFinished = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     frameChangeRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView, int)
     errorDetailsRequested = QtCore.pyqtSignal(str)
+    externalPathsDropped = QtCore.pyqtSignal(list)
 
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
@@ -481,7 +482,12 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
             return
 
         if mime_data.hasUrls():
-            super().dropEvent(event)
+            paths = [url.toLocalFile() for url in mime_data.urls() if url.isLocalFile()]
+            if paths:
+                self.externalPathsDropped.emit(paths)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
         else:
             event.ignore()
 
