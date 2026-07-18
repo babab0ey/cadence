@@ -511,6 +511,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.windowLevelChanged.connect(self._on_window_level_changed)
             view.windowLevelFinished.connect(self._on_window_level_finished)
             view.frameChangeRequested.connect(self._on_frame_change_requested)
+            view.errorDetailsRequested.connect(self._show_error_details)
             self.all_scenes.append(scene)
             self.all_views.append(view)
             view.setVisible(False)
@@ -950,6 +951,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
             return
         self._active_load_token_by_view.pop(view_index, None)
         self.all_views[view_index].set_loading(False)
+        details = f"{error.user_title}\n\n{error.user_message}\n\nКод ошибки: {error.code}"
+        self.all_views[view_index].set_error_state(error.user_message, details)
         self._show_load_error(error)
         callback = context.get("on_failure")
         if callback:
@@ -961,14 +964,26 @@ class DICOMViewer(QtWidgets.QMainWindow):
         exc_info = (type(cause), cause, cause.__traceback__) if cause is not None else None
         logger.error("Ошибка открытия: %s", error, exc_info=exc_info)
 
+        try:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                error.user_title,
+                f"{error.user_message} Подробности сохранены в журнале.",
+                duration=4000,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                parent=self,
+            )
+        except ImportError:
+            self.statusBar().showMessage(error.user_message, 4000)
+
+    def _show_error_details(self, details):
         message = QtWidgets.QMessageBox(self)
         message.setIcon(QtWidgets.QMessageBox.Icon.Warning)
-        message.setWindowTitle(error.user_title)
-        message.setText(error.user_message)
-        message.setInformativeText("Подробности сохранены в журнале приложения.")
+        message.setWindowTitle("Подробности ошибки")
+        message.setText("Снимок не удалось открыть.")
+        message.setInformativeText("Эти сведения можно передать разработчику.")
         log_file = get_log_file()
-        if log_file is not None:
-            message.setDetailedText(f"Журнал: {log_file}\nКод ошибки: {error.code}")
+        message.setDetailedText(f"{details}\n\nЖурнал: {log_file or 'не найден'}")
         message.exec()
 
     def _update_single_view_display(
@@ -1497,6 +1512,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         for view in getattr(self, "all_views", []):
             if hasattr(view, "apply_theme"):
                 view.apply_theme(self.is_dark_theme)
+                view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor(theme_tokens(self.is_dark_theme)["viewer_bg"])))
 
     def open_settings(self):
         from ui.dialogs.settings_dialog import SettingsDialog

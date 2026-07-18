@@ -179,6 +179,10 @@ def build_stylesheet(dark: bool = False) -> str:
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 
     QGraphicsView {{ background: {t['viewer_bg']}; border: 1px solid {t['border']}; border-radius: {g['radius_lg']}px; }}
+    QWidget#viewportStateOverlay {{ background: {t['viewer_bg']}; }}
+    QWidget#viewportStateOverlay QLabel {{ color: #F5F3EF; background: transparent; }}
+    QWidget#viewportStateOverlay QLabel[role='secondary'] {{ color: #9B9590; }}
+    QWidget#viewportStateOverlay QPushButton[buttonStyle='ghost'] {{ color: #D8D4CF; }}
     QFrame#frameControls, QFrame#focusControls {{ background: {t['viewer_overlay']}; border: 1px solid rgba(255,255,255,24); border-radius: {g['radius_lg']}px; }}
     QFrame#focusControls QLabel, QFrame#focusControls QPushButton, QFrame#frameControls QLabel, QFrame#frameControls QPushButton {{ color: #F5F3EF; }}
     QLabel#focusHint {{ background: {t['viewer_overlay']}; color: #F5F3EF; border-radius: {g['radius_sm']}px; padding: 8px 12px; }}

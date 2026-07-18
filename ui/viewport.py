@@ -9,6 +9,7 @@ from tools.roi_shapes import RoiRectTool, RoiEllipseTool, PolygonTool
 from tools.pen import PenTool
 from tools.note import NoteTool
 from resources.design_tokens import GEOMETRY, theme_tokens
+from resources.icons import make_icon, make_pixmap
 
 
 class SkeletonOverlay(QtWidgets.QWidget):
@@ -98,6 +99,95 @@ class SkeletonOverlay(QtWidgets.QWidget):
         painter.drawText(card.adjusted(0, 0, 0, -20), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, self._text)
 
 
+class ViewportStateOverlay(QtWidgets.QWidget):
+    openRequested = QtCore.pyqtSignal()
+    detailsRequested = QtCore.pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("viewportStateOverlay")
+        self._dark = False
+        self._details = ""
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(28, 28, 28, 28)
+        layout.addStretch()
+        self.icon = QtWidgets.QLabel()
+        self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.icon)
+        self.title = QtWidgets.QLabel()
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title.setWordWrap(True)
+        self.title.setProperty("role", "sectionTitle")
+        layout.addWidget(self.title)
+        self.message = QtWidgets.QLabel()
+        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message.setWordWrap(True)
+        self.message.setProperty("role", "secondary")
+        self.message.setMaximumWidth(460)
+        layout.addWidget(self.message, alignment=Qt.AlignmentFlag.AlignHCenter)
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addStretch()
+        self.open_button = QtWidgets.QPushButton("Открыть папку")
+        self.open_button.setProperty("buttonStyle", "primary")
+        self.open_button.setIcon(make_icon("folder-open", "#FFFFFF", 20))
+        self.open_button.setIconSize(QtCore.QSize(20, 20))
+        self.open_button.clicked.connect(self.openRequested)
+        button_row.addWidget(self.open_button)
+        self.details_button = QtWidgets.QPushButton("Подробнее")
+        self.details_button.setProperty("buttonStyle", "ghost")
+        self.details_button.setIcon(make_icon("circle-help", "#F5F3EF", 18))
+        self.details_button.clicked.connect(lambda: self.detailsRequested.emit(self._details))
+        button_row.addWidget(self.details_button)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+        layout.addStretch()
+        self._effect = QtWidgets.QGraphicsOpacityEffect(self)
+        self._effect.setOpacity(1.0)
+        self.setGraphicsEffect(self._effect)
+        self._fade = QtCore.QPropertyAnimation(self._effect, b"opacity", self)
+        self._fade.setDuration(GEOMETRY["transition_base"])
+        self._fade.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+
+    def set_theme(self, dark):
+        self._dark = bool(dark)
+        if self.details_button.isVisible():
+            self._set_error_icon()
+        else:
+            self._set_empty_icon()
+
+    def show_empty(self):
+        self._details = ""
+        self.title.setText("Откройте папку с исследованием")
+        self.message.setText("Снимки появятся здесь и в панели слева")
+        self.open_button.show()
+        self.details_button.hide()
+        self._set_empty_icon()
+        self._appear()
+
+    def show_error(self, message, details=""):
+        self._details = details or message
+        self.title.setText("Не удалось открыть снимок")
+        self.message.setText(message)
+        self.open_button.hide()
+        self.details_button.show()
+        self._set_error_icon()
+        self._appear()
+
+    def _appear(self):
+        self.show()
+        self.raise_()
+        self._fade.stop()
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+
+    def _set_empty_icon(self):
+        self.icon.setPixmap(make_pixmap("folder-open", theme_tokens(self._dark)["text_disabled"], 64))
+
+    def _set_error_icon(self):
+        self.icon.setPixmap(make_pixmap("circle-alert", "#E05C5C", 48))
+
+
 class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     loadImageRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     viewClicked = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
@@ -109,6 +199,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     windowLevelChanged = QtCore.pyqtSignal(QtWidgets.QGraphicsView, int, int)
     windowLevelFinished = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     frameChangeRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView, int)
+    errorDetailsRequested = QtCore.pyqtSignal(str)
 
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
@@ -152,6 +243,10 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.wheel_zoom_enabled = True
 
         self._loading_overlay = SkeletonOverlay(self.viewport())
+        self._state_overlay = ViewportStateOverlay(self.viewport())
+        self._state_overlay.openRequested.connect(lambda: self.loadImageRequested.emit(self))
+        self._state_overlay.detailsRequested.connect(self.errorDetailsRequested)
+        self._state_overlay.show_empty()
 
         self._current_frame_index = 0
         self._frame_count = 1
@@ -224,10 +319,17 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
 
     def apply_theme(self, dark):
         self._loading_overlay.set_theme(dark)
+        self._state_overlay.set_theme(dark)
+
+    def set_error_state(self, message, details=""):
+        self._loading_overlay.stop()
+        self._state_overlay.setGeometry(self.viewport().rect())
+        self._state_overlay.show_error(message, details)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._loading_overlay.setGeometry(self.viewport().rect())
+        self._state_overlay.setGeometry(self.viewport().rect())
         self._position_frame_controls()
 
     def _position_frame_controls(self):
@@ -681,6 +783,8 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.image_array_ref = adjusted_array
         self.pixel_spacing = pixel_spacing if pixel_spacing is not None and pixel_spacing > 1e-9 else 1.0
         self.pixmap_item_ref = pixmap_item
+        if pixmap_item is not None:
+            self._state_overlay.hide()
 
     def clear_image_data(self):
         if self.pixmap_item_ref and self.pixmap_item_ref.scene() == self.scene():
@@ -693,6 +797,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.pixmap_item_ref = None
         self.set_frame_navigation(0, 1)
         self.clear_all_drawing_items()
+        self._state_overlay.show_empty()
 
     def set_tool_mode(self, mode):
         if self.tool_mode == ToolManager.TOOL_ANGLE and mode != ToolManager.TOOL_ANGLE:
