@@ -1,9 +1,10 @@
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6 import QtWidgets, QtGui, QtCore
+from PyQt6 import QtGui, QtWidgets
+
 from core.logging_config import get_logger, install_exception_hooks, setup_logging
 from resources.design_tokens import GEOMETRY, build_stylesheet, register_inter_font
 from ui.main_window import DICOMViewer
@@ -12,14 +13,12 @@ from ui.main_window import DICOMViewer
 def main():
     log_file = setup_logging()
     logger = get_logger("main")
-    # Fix encoding for stdout (Russian print statements)
-    if hasattr(sys.stdout, 'reconfigure'):
+    if hasattr(sys.stdout, "reconfigure"):
         try:
-            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stdout.reconfigure(encoding="utf-8")
         except Exception:
             pass
 
-    # High-DPI is enabled by default in PyQt6
     app = QtWidgets.QApplication(sys.argv)
     install_exception_hooks()
     app.setApplicationName("Claude DICOM Viewer")
@@ -46,5 +45,5 @@ def main():
     sys.exit(app.exec())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

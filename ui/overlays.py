@@ -3,6 +3,7 @@ import os
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import Qt
 from core.workspace_manager import get_projection_info
+from resources.design_tokens import theme_tokens
 
 
 PROJECTION_PRIORITY = [
@@ -49,6 +50,10 @@ def update_image_overlay(view_index, vd, scene, view, is_dark_theme=False, brigh
     # tiny matrix (for example a 10×10 dose sample) cannot carry readable
     # metadata without covering the pixels, so its overlay is intentionally
     # omitted.
+    displayed_width = bounds.width() * scale
+    displayed_height = bounds.height() * scale
+    if displayed_width < 320 or displayed_height < 220:
+        return
     ideal_font_size = 12 / scale
     if ideal_font_size < 1.0:
         return
@@ -56,6 +61,8 @@ def update_image_overlay(view_index, vd, scene, view, is_dark_theme=False, brigh
     margin = max(2, round(8 / scale))
 
     overlay_font.setPixelSize(font_size)
+    overlay_background = QtGui.QColor(theme_tokens(is_dark_theme)["viewer_overlay"])
+    overlay_background.setAlpha(210)
 
     wc_str = f"{vd.wc:.0f}" if isinstance(vd.wc, (int, float)) else '—'
     ww_str = f"{vd.ww:.0f}" if isinstance(vd.ww, (int, float)) else '—'
@@ -108,7 +115,17 @@ def update_image_overlay(view_index, vd, scene, view, is_dark_theme=False, brigh
         if alignment & Qt.AlignmentFlag.AlignBottom:
             y -= item_bounds.height()
         item.setPos(x, y)
-        vd.overlay_items.append(item)
+        padding = max(1.0, 4.0 / scale)
+        radius = max(1.0, 6.0 / scale)
+        background_path = QtGui.QPainterPath()
+        background_path.addRoundedRect(item_bounds.adjusted(-padding, -padding, padding, padding), radius, radius)
+        background = QtWidgets.QGraphicsPathItem(background_path, pixmap_item)
+        background.setBrush(overlay_background)
+        background.setPen(QtGui.QPen(Qt.PenStyle.NoPen))
+        background.setPos(x, y)
+        background.setZValue(9)
+        background._is_dicom_overlay = True
+        vd.overlay_items.extend((background, item))
 
 
 def _detect_projection(vd):
