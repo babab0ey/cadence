@@ -130,6 +130,23 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     def dragMoveEvent(self, event):
         event.acceptProposedAction()
 
+    def _viewer_window(self):
+        parent = self.parent()
+        while parent and not hasattr(parent, "view_data"):
+            parent = parent.parent()
+        return parent
+
+    def _main_view_drag_payload(self):
+        try:
+            view_index = int(self.objectName().split("_")[-1])
+        except (TypeError, ValueError, IndexError):
+            return ""
+        viewer = self._viewer_window()
+        if viewer is None or not (0 <= view_index < len(viewer.view_data)):
+            return ""
+        file_path = viewer.view_data[view_index].file_path or ""
+        return f"main_view_file_{view_index}_{file_path}"
+
     def dropEvent(self, event):
         mime_data = event.mimeData()
         if mime_data.hasText() and mime_data.text().startswith('view_swap_'):
@@ -168,10 +185,13 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
                 file_path = m.group(2)
                 target_idx = int(self.objectName().split('_')[-1])
                 if source_idx != target_idx:
-                    parent = self.parent()
-                    while parent and not hasattr(parent, 'view_data'):
-                        parent = parent.parent()
-                    if parent and parent.view_data[source_idx].get('file_path') == file_path:
+                    viewer = self._viewer_window()
+                    source_is_valid = (
+                        viewer is not None
+                        and 0 <= source_idx < len(viewer.view_data)
+                        and viewer.view_data[source_idx].file_path == file_path
+                    )
+                    if source_is_valid:
                         self.viewDropOccurred.emit(source_idx, target_idx)
                         event.acceptProposedAction()
                         return
@@ -310,14 +330,10 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
                 return
             drag = QtGui.QDrag(self)
             mime_data = QtCore.QMimeData()
-            view_index = int(self.objectName().split('_')[-1])
-            parent = self.parent()
-            while parent and not hasattr(parent, 'view_data'):
-                parent = parent.parent()
-            file_path = ""
-            if parent and hasattr(parent, 'view_data'):
-                file_path = parent.view_data[view_index].get('file_path', "")
-            mime_data.setText(f"main_view_file_{view_index}_{file_path}")
+            payload = self._main_view_drag_payload()
+            if not payload:
+                return
+            mime_data.setText(payload)
             drag.setMimeData(mime_data)
             if self.pixmap_item_ref:
                 pixmap = self.pixmap_item_ref.pixmap().scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio,
