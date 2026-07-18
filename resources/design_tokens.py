@@ -151,6 +151,7 @@ def build_stylesheet(dark: bool = False) -> str:
     QPushButton[buttonStyle='primary'] {{ background: {t['accent']}; border-color: {t['accent']}; color: {t['text_on_accent']}; font-weight: 600; }}
     QPushButton[buttonStyle='primary']:hover {{ background: {t['accent_hover']}; border-color: {t['accent_hover']}; }}
     QPushButton[buttonStyle='secondary'] {{ background: transparent; border-color: {t['border']}; color: {t['text_primary']}; font-weight: 550; }}
+    QPushButton[segmentSelected='true'] {{ background: {t['accent_light']}; border-color: {t['accent']}; color: {t['accent']}; font-weight: 600; }}
     QPushButton[buttonStyle='ghost'], QToolButton[buttonStyle='ghost'] {{ background: transparent; border-color: transparent; color: {t['text_secondary']}; }}
     QPushButton[buttonStyle='ghost']:hover, QToolButton[buttonStyle='ghost']:hover {{ background: {t['bg_hover']}; color: {t['text_primary']}; }}
     QPushButton[iconOnly='true'], QToolButton[iconOnly='true'] {{ min-width: {g['hit_target']}px; max-width: {g['hit_target']}px; padding: 0; }}

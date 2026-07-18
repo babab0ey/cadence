@@ -21,7 +21,7 @@ from core.errors import ViewerError, wrap_unexpected_error
 from core.logging_config import get_log_file, get_logger
 from core.tasks import FileLoadTask
 from models.view_data import ViewData
-from resources.design_tokens import GEOMETRY, build_stylesheet
+from resources.design_tokens import GEOMETRY, build_stylesheet, theme_tokens
 from tools.tool_manager import ToolManager
 from ui.viewport import InteractiveGraphicsView
 from ui.sidebar import SidebarWidget
@@ -63,9 +63,14 @@ class DICOMViewer(QtWidgets.QMainWindow):
 
         self.app_config = {
             'dark_theme': False,
+            'theme_mode': 'light',
             'large_ui': False,
             'low_quality': False,
-            'note_color': '#0000FF',
+            'render_quality': 'balanced',
+            'smooth_interpolation': True,
+            'wheel_zoom': True,
+            'wl_sensitivity': 100,
+            'note_color': '#D97757',
             'lang': 'ru'
         }
 
@@ -73,7 +78,18 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self.is_dark_theme = self.settings.value(
                 "appearance/dark_theme", False, type=bool
             )
+            self.app_config["theme_mode"] = self.settings.value(
+                "appearance/theme_mode", "dark" if self.is_dark_theme else "light", type=str
+            )
+            self.is_dark_theme = self._resolved_dark_theme(self.app_config["theme_mode"])
             self.app_config["dark_theme"] = self.is_dark_theme
+            self.app_config["large_ui"] = self.settings.value("appearance/large_ui", False, type=bool)
+            self.app_config["render_quality"] = self.settings.value("viewer/render_quality", "balanced", type=str)
+            self.app_config["low_quality"] = self.app_config["render_quality"] == "fast"
+            self.app_config["smooth_interpolation"] = self.settings.value("viewer/smooth_interpolation", True, type=bool)
+            self.app_config["wheel_zoom"] = self.settings.value("controls/wheel_zoom", True, type=bool)
+            self.app_config["wl_sensitivity"] = self.settings.value("controls/wl_sensitivity", 100, type=int)
+            self.app_config["note_color"] = self.settings.value("annotations/note_color", "#D97757", type=str)
             self.last_opened_folder = self.settings.value(
                 "files/last_folder", "", type=str
             )
@@ -139,6 +155,17 @@ class DICOMViewer(QtWidgets.QMainWindow):
         if self.minimumSize() != self._minimum_ui_size:
             self.setMinimumSize(self._minimum_ui_size)
         super().showEvent(event)
+
+    @staticmethod
+    def _resolved_dark_theme(theme_mode):
+        if theme_mode == "dark":
+            return True
+        if theme_mode == "auto":
+            try:
+                return QtWidgets.QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+            except (AttributeError, TypeError):
+                return False
+        return False
 
     def _setup_central_widget(self):
         self.central_widget = QtWidgets.QWidget()
@@ -276,6 +303,13 @@ class DICOMViewer(QtWidgets.QMainWindow):
             else self.saveGeometry()
         )
         self.settings.setValue("appearance/dark_theme", self.is_dark_theme)
+        self.settings.setValue("appearance/theme_mode", self.app_config.get("theme_mode", "dark" if self.is_dark_theme else "light"))
+        self.settings.setValue("appearance/large_ui", self.app_config.get("large_ui", False))
+        self.settings.setValue("viewer/render_quality", self.app_config.get("render_quality", "balanced"))
+        self.settings.setValue("viewer/smooth_interpolation", self.app_config.get("smooth_interpolation", True))
+        self.settings.setValue("controls/wheel_zoom", self.app_config.get("wheel_zoom", True))
+        self.settings.setValue("controls/wl_sensitivity", self.app_config.get("wl_sensitivity", 100))
+        self.settings.setValue("annotations/note_color", self.app_config.get("note_color", "#D97757"))
         self.settings.setValue("files/last_folder", self.last_opened_folder)
         self.settings.setValue("window/geometry", geometry)
         self.sidebar.remember_current_width()
@@ -466,7 +500,8 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.setObjectName(f"view_{i}")
             view.setMinimumSize(200, 200)
             view.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-            view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#F0EEE6")))
+            view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor(theme_tokens(self.is_dark_theme)["viewer_bg"])))
+            view.wheel_zoom_enabled = self.app_config.get("wheel_zoom", True)
             view.loadImageRequested.connect(self._handle_load_request)
             view.viewClicked.connect(self.set_active_view)
             view.singleViewToggleRequested.connect(self._toggle_single_view_for_view)
@@ -1102,6 +1137,9 @@ class DICOMViewer(QtWidgets.QMainWindow):
         view_data = self.view_data[view_index]
         width_sensitivity = state["ww"] / max(160, view_object.viewport().width()) * 2.0
         level_sensitivity = state["ww"] / max(160, view_object.viewport().height()) * 2.0
+        sensitivity = max(0.4, min(2.0, float(self.app_config.get("wl_sensitivity", 100)) / 100.0))
+        width_sensitivity *= sensitivity
+        level_sensitivity *= sensitivity
         view_data.ww = max(1.0, state["ww"] + float(delta_x) * width_sensitivity)
         # Moving up decreases the window center and therefore makes the image brighter.
         view_data.wc = state["wc"] + float(delta_y) * level_sensitivity
@@ -1429,6 +1467,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def toggle_theme(self):
         self.is_dark_theme = not self.is_dark_theme
         self.app_config['dark_theme'] = self.is_dark_theme
+        self.app_config['theme_mode'] = 'dark' if self.is_dark_theme else 'light'
         self._apply_theme()
         if self._settings_enabled:
             self.settings.setValue("appearance/dark_theme", self.is_dark_theme)
@@ -1467,13 +1506,20 @@ class DICOMViewer(QtWidgets.QMainWindow):
 
     def _update_config(self, new_config):
         self.app_config = new_config
-        self.is_dark_theme = self.app_config['dark_theme']
+        self.is_dark_theme = self._resolved_dark_theme(self.app_config.get('theme_mode', 'light'))
+        self.app_config['dark_theme'] = self.is_dark_theme
         self._apply_theme()
         if self._settings_enabled:
             self.settings.setValue("appearance/dark_theme", self.is_dark_theme)
+            self.settings.setValue("appearance/theme_mode", self.app_config.get("theme_mode", "light"))
         for view in self.all_views:
             view.note_color = QtGui.QColor(self.app_config['note_color'])
             view.set_low_quality_mode(self.app_config['low_quality'])
+            view.wheel_zoom_enabled = self.app_config.get('wheel_zoom', True)
+            view.setRenderHint(
+                QtGui.QPainter.RenderHint.SmoothPixmapTransform,
+                self.app_config.get('smooth_interpolation', True) and not self.app_config['low_quality'],
+            )
         font = QtWidgets.QApplication.font()
         if self.app_config['large_ui']:
             font.setPixelSize(17)
@@ -1482,6 +1528,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             font.setPixelSize(GEOMETRY["font_base"])
             self.toolbar.setIconSize(QtCore.QSize(24, 24))
         QtWidgets.QApplication.setFont(font)
+        self._save_settings()
 
     def open_help(self):
         from ui.dialogs.help_dialog import HelpDialog

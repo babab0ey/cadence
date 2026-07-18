@@ -149,6 +149,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self._zoom_start_pos = None
         self.view_data = None
         self.is_low_quality = False
+        self.wheel_zoom_enabled = True
 
         self._loading_overlay = SkeletonOverlay(self.viewport())
 
@@ -615,6 +616,9 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         ):
             self._step_frame(1 if angle_delta > 0 else -1)
             event.accept()
+            return
+        if not self.wheel_zoom_enabled:
+            event.ignore()
             return
         zoom_in = angle_delta > 0
         zoom_step = 1.15
