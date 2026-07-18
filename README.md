@@ -1,4 +1,4 @@
-# Просмотр снимков
+# Cadence
 
 > Быстрый, спокойный и минималистичный DICOM‑просмотровик для врачей‑рентгенологов — без визуального шума и лишних действий.
 
@@ -55,8 +55,8 @@
 Требуется **Windows 10/11** и **Python 3.12**.
 
 ```powershell
-git clone <адрес-вашего-репозитория>
-cd claude_dicom_viewer
+git clone https://github.com/babab0ey/cadence.git
+cd cadence
 
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -117,4 +117,3 @@ scripts/    проверка релиза и генерация синтетич
 ## Благодарности
 
 Проект использует [Inter](https://rsms.me/inter/) и [Lucide Icons](https://lucide.dev/); тексты их лицензий находятся рядом с ресурсами. Спасибо экосистемам Qt, pydicom и NumPy за фундамент, на котором можно строить быстрые медицинские инструменты.
-
