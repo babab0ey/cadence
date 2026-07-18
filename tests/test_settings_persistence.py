@@ -63,7 +63,7 @@ class SettingsPersistenceTests(unittest.TestCase):
             window = DICOMViewer(settings=settings)
 
             self.assertEqual(window.current_mode_index, 2)
-            self.assertEqual(window.sidebar.width(), 280)
+            self.assertEqual(window.sidebar.expanded_width, 360)
             window.close()
 
 

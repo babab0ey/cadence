@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtWidgets
 
 from ui.main_window import DICOMViewer
-from ui.sidebar import SidebarWidget, ThumbnailWidget
+from ui.sidebar import SidebarWidget
 
 
 class SidebarFullListTests(unittest.TestCase):
@@ -35,12 +35,13 @@ class SidebarFullListTests(unittest.TestCase):
         sidebar = SidebarWidget()
         sidebar.extra_files = [f"C:/study/image_{index:03d}.dcm" for index in range(205)]
 
-        with mock.patch.object(ThumbnailWidget, "load_thumbnail", lambda _self: None):
-            sidebar.update_sidebar()
+        sidebar.update_sidebar()
 
-        thumbnails = sidebar.findChildren(ThumbnailWidget)
-        self.assertEqual(len(thumbnails), 205)
-        self.assertEqual(sidebar.count_label.text(), "205 files")
+        self.assertEqual(sidebar.model.rowCount(), 205)
+        self.assertEqual(sidebar.count_label.text(), "205 файлов")
+        # QListView virtualizes the catalogue: it must not allocate one QWidget
+        # for every DICOM file.
+        self.assertLess(len(sidebar.findChildren(QtWidgets.QWidget)), 40)
         sidebar.deleteLater()
 
     def test_sidebar_drop_does_not_remove_active_file_from_catalogue(self):

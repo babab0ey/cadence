@@ -109,7 +109,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
             restored_sidebar_width = self.settings.value(
                 "sidebar/width", 260, type=int
             )
-            self.sidebar.setFixedWidth(max(240, min(280, restored_sidebar_width)))
+            restored_sidebar_collapsed = self.settings.value(
+                "sidebar/collapsed", False, type=bool
+            )
+            self.sidebar.restore_state(restored_sidebar_width, restored_sidebar_collapsed)
         self._create_view_widgets()
         self._setup_toolbar()
         self.toolbar.set_current_mode(self.current_mode_index)
@@ -140,18 +143,21 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
 
+        self.splitter = QtWidgets.QSplitter(Qt.Orientation.Horizontal, self.central_widget)
+        self.splitter.setObjectName("mainSplitter")
+        self.splitter.setChildrenCollapsible(False)
+        self.main_layout.addWidget(self.splitter)
+
         # Sidebar
         self.sidebar = SidebarWidget()
         self.sidebar.viewSwapToSidebar.connect(self._handle_main_view_to_sidebar_drop)
-        self.main_layout.addWidget(self.sidebar, stretch=0)
-
-        # Toggle handle (thin divider)
-        self.toggle_handle = QtWidgets.QPushButton("◀")
-        self.toggle_handle.setFixedWidth(18)
-        self.toggle_handle.setObjectName("sidebarToggle")
-        self.toggle_handle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.toggle_handle.clicked.connect(lambda: self.sidebar.toggle_visibility(self.toggle_handle))
-        self.main_layout.addWidget(self.toggle_handle)
+        self.sidebar.fileActivated.connect(
+            lambda path: self._start_file_load(path, self.last_active_view_index)
+        )
+        self.splitter.addWidget(self.sidebar)
+        # Compatibility name used by focus-mode restoration; the control now
+        # lives inside the sidebar header instead of consuming a divider column.
+        self.toggle_handle = self.sidebar.toggle_button
 
         # Viewport container (with padding around grid)
         self.viewport_container = QtWidgets.QWidget()
@@ -161,7 +167,11 @@ class DICOMViewer(QtWidgets.QMainWindow):
 
         self.stack = QtWidgets.QStackedWidget()
         viewport_layout.addWidget(self.stack)
-        self.main_layout.addWidget(self.viewport_container, stretch=4)
+        self.splitter.addWidget(self.viewport_container)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.splitterMoved.connect(lambda _pos, _index: self.sidebar.remember_current_width())
 
         self.focus_controls = QtWidgets.QFrame(self.viewport_container)
         self.focus_controls.setObjectName("focusControls")
@@ -264,7 +274,9 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.settings.setValue("appearance/dark_theme", self.is_dark_theme)
         self.settings.setValue("files/last_folder", self.last_opened_folder)
         self.settings.setValue("window/geometry", geometry)
-        self.settings.setValue("sidebar/width", self.sidebar.width())
+        self.sidebar.remember_current_width()
+        self.settings.setValue("sidebar/width", self.sidebar.expanded_width)
+        self.settings.setValue("sidebar/collapsed", self.sidebar.is_collapsed)
         self.settings.setValue("view/layout_mode", self.current_mode_index)
         self.settings.sync()
 
@@ -876,6 +888,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 preserved_view_state=preserved_view_state,
             )
             self.all_views[view_index].set_loading(False)
+            self.sidebar.select_file(view_data.file_path)
             callback = context.get("on_success")
             if callback:
                 callback(view_index, view_data)

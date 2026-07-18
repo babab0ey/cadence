@@ -78,3 +78,45 @@ class ThumbnailLoadTask(QtCore.QRunnable):
         except BaseException:
             logger.debug("Не удалось создать превью: %s", self.file_path, exc_info=True)
             self.signals.failed.emit(self.file_path)
+
+
+class SidebarPreviewSignals(QtCore.QObject):
+    succeeded = QtCore.pyqtSignal(str, object, int)
+    failed = QtCore.pyqtSignal(str, str)
+
+
+class SidebarPreviewTask(QtCore.QRunnable):
+    """Lazy sidebar preview decoder with lightweight frame metadata."""
+
+    def __init__(self, file_path: str, max_size: int = 168):
+        super().__init__()
+        self.file_path = file_path
+        self.max_size = max_size
+        self.signals = SidebarPreviewSignals()
+        self.setAutoDelete(True)
+
+    @QtCore.pyqtSlot()
+    def run(self):
+        try:
+            image = load_thumbnail_qimage(self.file_path, self.max_size)
+            if image is None or image.isNull():
+                raise ValueError("Превью не создано")
+            frame_count = 1
+            try:
+                import os
+                from core.utils import DICOM_EXTS
+                if os.path.splitext(self.file_path)[1].lower() in DICOM_EXTS:
+                    import pydicom
+                    header = pydicom.dcmread(
+                        self.file_path,
+                        stop_before_pixels=True,
+                        specific_tags=["NumberOfFrames"],
+                        force=True,
+                    )
+                    frame_count = max(1, int(getattr(header, "NumberOfFrames", 1) or 1))
+            except Exception:
+                logger.debug("Не удалось прочитать число кадров: %s", self.file_path, exc_info=True)
+            self.signals.succeeded.emit(self.file_path, image, frame_count)
+        except BaseException as exc:
+            logger.debug("Не удалось создать превью: %s", self.file_path, exc_info=True)
+            self.signals.failed.emit(self.file_path, str(exc))
