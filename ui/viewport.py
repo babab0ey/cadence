@@ -14,7 +14,6 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     loadImageRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     viewClicked = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     roiSaveRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView, QtCore.QRectF)
-    folderOpenRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     singleViewToggleRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     viewDropOccurred = QtCore.pyqtSignal(int, int)
     sidebarFileDropped = QtCore.pyqtSignal(int, str)
@@ -200,9 +199,11 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
             if self.pixmap_item_ref is not None:
                 self.singleViewToggleRequested.emit(self)
                 event.accept()
+                return
             else:
                 self.loadImageRequested.emit(self)
                 event.accept()
+                return
         else:
             super().mouseDoubleClickEvent(event)
 

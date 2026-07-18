@@ -523,15 +523,6 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self.set_active_view(view_object)
             self.open_file_for_view(index)
 
-    def _handle_folder_open_request(self, view_object):
-        view_index = self.get_view_index(view_object)
-        if view_index == -1:
-            return
-        last_dir = os.path.dirname(self.view_data[view_index].file_path) if self.view_data[view_index].file_path else ""
-        folder_path = QtWidgets.QFileDialog.getExistingDirectory(self, f"Выбрать папку для окна {view_index + 1}", last_dir)
-        if folder_path:
-            self.open_folder(start_path=folder_path)
-
     def _handle_sidebar_drop(self, target_idx, dropped_file_path):
         if dropped_file_path not in self.sidebar.extra_files:
             return
