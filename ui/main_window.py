@@ -105,14 +105,17 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self._window_level_render_timer.timeout.connect(self._render_pending_window_level)
 
         self._setup_central_widget()
-        if self._settings_enabled:
-            restored_sidebar_width = self.settings.value(
-                "sidebar/width", 260, type=int
-            )
-            restored_sidebar_collapsed = self.settings.value(
-                "sidebar/collapsed", False, type=bool
-            )
-            self.sidebar.restore_state(restored_sidebar_width, restored_sidebar_collapsed)
+        restored_sidebar_width = (
+            self.settings.value("sidebar/width", 260, type=int)
+            if self._settings_enabled else 260
+        )
+        restored_sidebar_collapsed = (
+            self.settings.value("sidebar/collapsed", False, type=bool)
+            if self._settings_enabled else False
+        )
+        self.sidebar.restore_state(restored_sidebar_width, restored_sidebar_collapsed)
+        initial_sidebar_width = 48 if restored_sidebar_collapsed else self.sidebar.expanded_width
+        self.splitter.setSizes([initial_sidebar_width, max(640, self.width() - initial_sidebar_width)])
         self._create_view_widgets()
         self._setup_toolbar()
         self.toolbar.set_current_mode(self.current_mode_index)
