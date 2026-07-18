@@ -35,6 +35,16 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.contrast = 1.0
         self.negative_mode = False
         self.focus_mode = False
+        self._focus_view_index = None
+        self._focus_restore_mode = None
+        self._focus_restore_sidebar_visible = True
+        self._focus_restore_toolbar_visible = True
+        self._focus_restore_toggle_visible = True
+        self._focus_hint_shown = False
+        self._system_fullscreen_active = False
+        self._system_fullscreen_started_focus = False
+        self._fullscreen_restore_geometry = None
+        self._fullscreen_restore_maximized = False
         self.is_dark_theme = False
 
         self.app_config = {
@@ -101,6 +111,34 @@ class DICOMViewer(QtWidgets.QMainWindow):
         viewport_layout.addWidget(self.stack)
         self.main_layout.addWidget(self.viewport_container, stretch=4)
 
+        self.focus_controls = QtWidgets.QFrame(self.viewport_container)
+        self.focus_controls.setObjectName("focusControls")
+        focus_controls_layout = QtWidgets.QHBoxLayout(self.focus_controls)
+        focus_controls_layout.setContentsMargins(6, 6, 6, 6)
+        focus_controls_layout.setSpacing(6)
+
+        self.focus_info_button = QtWidgets.QPushButton("ⓘ  Инфо")
+        self.focus_info_button.setObjectName("focusInfoButton")
+        self.focus_info_button.setToolTip("Информация о пациенте")
+        self.focus_info_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.focus_info_button.clicked.connect(self.show_study_info_dialog)
+        focus_controls_layout.addWidget(self.focus_info_button)
+
+        self.focus_exit_button = QtWidgets.QPushButton("Выйти")
+        self.focus_exit_button.setObjectName("focusExitButton")
+        self.focus_exit_button.setToolTip("Вернуться к предыдущей раскладке (Esc)")
+        self.focus_exit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.focus_exit_button.clicked.connect(self._exit_single_view_mode)
+        focus_controls_layout.addWidget(self.focus_exit_button)
+        self.focus_controls.adjustSize()
+        self.focus_controls.hide()
+
+        self.focus_hint = QtWidgets.QLabel("Esc или двойной клик — выйти", self.viewport_container)
+        self.focus_hint.setObjectName("focusHint")
+        self.focus_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.focus_hint.adjustSize()
+        self.focus_hint.hide()
+
     def _setup_toolbar(self):
         self.toolbar = TopToolbar(self)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
@@ -112,7 +150,12 @@ class DICOMViewer(QtWidgets.QMainWindow):
 
     def _setup_shortcuts(self):
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self, self._undo_action)
-        QtGui.QShortcut(QtGui.QKeySequence("F11"), self, self._toggle_focus)
+        fullscreen_shortcut = QtGui.QShortcut(QtGui.QKeySequence("F11"), self, self._toggle_system_fullscreen)
+        fullscreen_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        escape_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, self._handle_escape)
+        escape_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._fullscreen_shortcut = fullscreen_shortcut
+        self._escape_shortcut = escape_shortcut
 
     def _handle_toolbar_action(self, action_name):
         mapping = {
@@ -133,7 +176,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             "undo": self._undo_action,
             "settings": self.open_settings,
             "help": self.open_help,
-            "focus": self._toggle_focus,
+            "focus": self._toggle_system_fullscreen,
             "toggle_theme": self.toggle_theme,
         }
         handler = mapping.get(action_name)
@@ -167,10 +210,129 @@ class DICOMViewer(QtWidgets.QMainWindow):
         if 0 <= self.last_active_view_index < MAX_VIEWS:
             self.all_views[self.last_active_view_index].undo_stack.undo()
 
-    def _toggle_focus(self):
-        self.focus_mode = not self.focus_mode
-        self.sidebar.setVisible(not self.focus_mode)
-        self.toolbar.setVisible(not self.focus_mode)
+    def _handle_escape(self):
+        if self.focus_mode or self._system_fullscreen_active:
+            self._exit_single_view_mode()
+            return
+        if hasattr(self.toolbar, "tool_actions") and ToolManager.TOOL_NONE in self.toolbar.tool_actions:
+            self.toolbar.tool_actions[ToolManager.TOOL_NONE].setChecked(True)
+            self.set_tool_for_visible_views(ToolManager.TOOL_NONE)
+
+    def _toggle_single_view_for_view(self, view_object):
+        view_index = self.get_view_index(view_object)
+        if view_index == -1 or not self.view_data[view_index].is_loaded():
+            return
+        if self.focus_mode:
+            self._exit_single_view_mode()
+        else:
+            self._enter_single_view_mode(view_index)
+
+    def _enter_single_view_mode(self, view_index):
+        if not (0 <= view_index < MAX_VIEWS):
+            return
+        if not self.focus_mode:
+            self._focus_restore_mode = self.current_mode_index
+            self._focus_restore_sidebar_visible = self.sidebar.isVisible()
+            self._focus_restore_toolbar_visible = self.toolbar.isVisible()
+            self._focus_restore_toggle_visible = self.toggle_handle.isVisible()
+        self.focus_mode = True
+        self._focus_view_index = view_index
+        self.last_active_view_index = view_index
+        self.sidebar.hide()
+        self.toggle_handle.hide()
+        self.toolbar.hide()
+        self._show_only_view(view_index)
+        self.focus_controls.show()
+        self.focus_controls.raise_()
+        if not self._focus_hint_shown:
+            self._focus_hint_shown = True
+            self.focus_hint.show()
+            self.focus_hint.raise_()
+            QtCore.QTimer.singleShot(4500, self.focus_hint.hide)
+        self._position_focus_overlays()
+        self.all_views[view_index].setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _show_only_view(self, view_index):
+        while self.view_layout.count():
+            item = self.view_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.hide()
+                widget.setParent(None)
+        focused_view = self.all_views[view_index]
+        self.view_layout.addWidget(focused_view, 0, 0, 1, 1)
+        focused_view.show()
+        for index, view in enumerate(self.all_views):
+            if index != view_index:
+                view.hide()
+        self._update_single_view_display(view_index)
+
+    def _exit_single_view_mode(self):
+        if self._system_fullscreen_active:
+            self._leave_system_fullscreen()
+        if not self.focus_mode:
+            return
+        restore_mode = self._focus_restore_mode if self._focus_restore_mode is not None else 0
+        self.focus_mode = False
+        self._focus_view_index = None
+        self.focus_controls.hide()
+        self.focus_hint.hide()
+        self.sidebar.setVisible(self._focus_restore_sidebar_visible)
+        self.toggle_handle.setVisible(self._focus_restore_toggle_visible)
+        self.toolbar.setVisible(self._focus_restore_toolbar_visible)
+        self._setup_layout_for_mode(restore_mode)
+        self._focus_restore_mode = None
+
+    def _toggle_system_fullscreen(self):
+        if self._system_fullscreen_active:
+            started_focus = self._system_fullscreen_started_focus
+            self._leave_system_fullscreen()
+            if started_focus:
+                self._exit_single_view_mode()
+            return
+
+        self._system_fullscreen_started_focus = not self.focus_mode
+        if not self.focus_mode:
+            self._enter_single_view_mode(self.last_active_view_index)
+        self._fullscreen_restore_geometry = self.saveGeometry()
+        self._fullscreen_restore_maximized = self.isMaximized()
+        self._system_fullscreen_active = True
+        self.showFullScreen()
+        self.focus_controls.show()
+        self.focus_controls.raise_()
+        QtCore.QTimer.singleShot(0, self._position_focus_overlays)
+
+    def _leave_system_fullscreen(self):
+        if not self._system_fullscreen_active:
+            return
+        self._system_fullscreen_active = False
+        self.showNormal()
+        if self._fullscreen_restore_geometry is not None:
+            self.restoreGeometry(self._fullscreen_restore_geometry)
+        if self._fullscreen_restore_maximized:
+            self.showMaximized()
+        self._fullscreen_restore_geometry = None
+        self._fullscreen_restore_maximized = False
+        self._system_fullscreen_started_focus = False
+        QtCore.QTimer.singleShot(0, self._position_focus_overlays)
+
+    def _position_focus_overlays(self):
+        if not hasattr(self, "focus_controls") or not self.focus_controls.isVisible():
+            return
+        self.focus_controls.adjustSize()
+        margin = 18
+        controls_x = max(margin, self.viewport_container.width() - self.focus_controls.width() - margin)
+        self.focus_controls.move(controls_x, margin)
+        self.focus_controls.raise_()
+        if self.focus_hint.isVisible():
+            self.focus_hint.adjustSize()
+            hint_x = max(margin, self.viewport_container.width() - self.focus_hint.width() - margin)
+            self.focus_hint.move(hint_x, margin + self.focus_controls.height() + 10)
+            self.focus_hint.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_focus_overlays()
 
     def _set_initial_focus_and_border(self):
         if not self.all_views:
@@ -203,7 +365,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#F0EEE6")))
             view.loadImageRequested.connect(self._handle_load_request)
             view.viewClicked.connect(self.set_active_view)
-            view.folderOpenRequested.connect(self._handle_folder_open_request)
+            view.singleViewToggleRequested.connect(self._toggle_single_view_for_view)
             view.viewDropOccurred.connect(self.swap_view_data)
             view.sidebarFileDropped.connect(self._handle_sidebar_drop)
             self.all_scenes.append(scene)

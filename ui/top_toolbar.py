@@ -76,7 +76,7 @@ class TopToolbar(QtWidgets.QToolBar):
         self.tool_group.setExclusive(True)
 
         tools_config = [
-            (ToolManager.TOOL_NONE, "cursor", "Курсор", "Esc"),
+            (ToolManager.TOOL_NONE, "cursor", "Курсор", ""),
             (ToolManager.TOOL_RULER, "ruler", "Рулетка", "Alt+R"),
             (ToolManager.TOOL_ANGLE, "angle", "Угол", "Alt+A"),
             (ToolManager.TOOL_ROI, "rectangle", "Прямоугольник", "Alt+O"),
@@ -143,7 +143,7 @@ class TopToolbar(QtWidgets.QToolBar):
 
         # ── Right side: clear, theme, more ──
         self._add_button("trash", "", "clear_all", tooltip="Очистить все окна")
-        self._add_button("focus", "", "focus", "F11", tooltip="Режим фокуса (F11)")
+        self._add_button("focus", "", "focus", tooltip="Полноэкранный режим (F11)")
 
         # Theme toggle (sun/moon)
         self.theme_action = QtGui.QAction("", self)

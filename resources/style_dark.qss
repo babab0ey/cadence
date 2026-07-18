@@ -886,3 +886,35 @@ QLabel#loadingLabel {
     font-weight: 500;
     padding: 8px;
 }
+
+QFrame#focusControls {
+    background-color: rgba(38, 36, 34, 0.96);
+    border: 1px solid rgba(250, 249, 245, 0.12);
+    border-radius: 14px;
+}
+
+QPushButton#focusInfoButton,
+QPushButton#focusExitButton {
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QPushButton#focusInfoButton {
+    color: #FFFFFF;
+    background-color: #D97757;
+}
+
+QPushButton#focusInfoButton:hover {
+    background-color: #E08465;
+}
+
+QLabel#focusHint {
+    color: #1A1918;
+    background-color: rgba(250, 249, 245, 0.92);
+    border-radius: 9px;
+    padding: 8px 12px;
+    font-size: 13px;
+}
