@@ -97,6 +97,7 @@ class SafeLoaderTests(unittest.TestCase):
         view_data = load_dicom_file(str(path), frame_index=1)
 
         self.assertEqual(view_data.number_of_frames, 3)
+        self.assertEqual(view_data.current_frame_index, 1)
         self.assertEqual(view_data.original_array.shape, (7, 9))
         self.assertTrue(np.all(view_data.original_array == 20))
 

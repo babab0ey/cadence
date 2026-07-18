@@ -22,6 +22,7 @@ class FileLoadTask(QtCore.QRunnable):
         brightness: int = 0,
         contrast: float = 1.0,
         negative: bool = False,
+        window_level_override=None,
     ):
         super().__init__()
         self.token = token
@@ -30,6 +31,7 @@ class FileLoadTask(QtCore.QRunnable):
         self.brightness = brightness
         self.contrast = contrast
         self.negative = negative
+        self.window_level_override = window_level_override
         self.signals = FileLoadSignals()
         self.setAutoDelete(True)
 
@@ -37,6 +39,8 @@ class FileLoadTask(QtCore.QRunnable):
     def run(self):
         try:
             view_data = load_generic_file(self.file_path, frame_index=self.frame_index)
+            if self.window_level_override is not None:
+                view_data.wc, view_data.ww = self.window_level_override
             apply_adjustments_pipeline(
                 view_data,
                 self.brightness,

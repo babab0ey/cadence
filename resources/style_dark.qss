@@ -918,3 +918,42 @@ QLabel#focusHint {
     padding: 8px 12px;
     font-size: 13px;
 }
+
+QFrame#frameControls {
+    background-color: rgba(38, 36, 34, 0.96);
+    border: 1px solid rgba(250, 249, 245, 0.12);
+    border-radius: 14px;
+}
+
+QPushButton#frameNavigationButton {
+    padding: 0;
+    border-radius: 9px;
+    font-size: 24px;
+    font-weight: 500;
+}
+
+QLabel#frameLabel {
+    color: #E7E3DA;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QSlider#frameSlider::groove:horizontal {
+    height: 4px;
+    background-color: #4A4742;
+    border-radius: 2px;
+}
+
+QSlider#frameSlider::sub-page:horizontal {
+    background-color: #D97757;
+    border-radius: 2px;
+}
+
+QSlider#frameSlider::handle:horizontal {
+    width: 16px;
+    height: 16px;
+    margin: -6px 0;
+    border-radius: 8px;
+    background-color: #E08465;
+    border: 2px solid #262422;
+}

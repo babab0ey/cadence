@@ -19,6 +19,7 @@ class ViewData:
     ww: Optional[float] = None
     photometric_interpretation: str = 'MONOCHROME2'
     number_of_frames: int = 1
+    current_frame_index: int = 0
     patient_name: str = 'N/A'
     patient_id: str = 'N/A'
     patient_birth_date: str = 'N/A'

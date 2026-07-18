@@ -20,6 +20,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     windowLevelStarted = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     windowLevelChanged = QtCore.pyqtSignal(QtWidgets.QGraphicsView, int, int)
     windowLevelFinished = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
+    frameChangeRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView, int)
 
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
@@ -79,6 +80,47 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         loading_layout.addStretch()
         self._loading_overlay.hide()
 
+        self._current_frame_index = 0
+        self._frame_count = 1
+        self._frame_request_timer = QtCore.QTimer(self)
+        self._frame_request_timer.setSingleShot(True)
+        self._frame_request_timer.setInterval(120)
+        self._frame_request_timer.timeout.connect(self._emit_pending_frame_request)
+
+        self._frame_controls = QtWidgets.QFrame(self.viewport())
+        self._frame_controls.setObjectName("frameControls")
+        frame_layout = QtWidgets.QHBoxLayout(self._frame_controls)
+        frame_layout.setContentsMargins(8, 6, 8, 6)
+        frame_layout.setSpacing(8)
+
+        self._previous_frame_button = QtWidgets.QPushButton("‹")
+        self._previous_frame_button.setObjectName("frameNavigationButton")
+        self._previous_frame_button.setToolTip("Предыдущий кадр (Alt + колесо вниз)")
+        self._previous_frame_button.setFixedSize(34, 34)
+        self._previous_frame_button.clicked.connect(lambda: self._step_frame(-1))
+        frame_layout.addWidget(self._previous_frame_button)
+
+        self._frame_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal)
+        self._frame_slider.setObjectName("frameSlider")
+        self._frame_slider.setMinimumWidth(110)
+        self._frame_slider.valueChanged.connect(self._on_frame_slider_changed)
+        self._frame_slider.sliderReleased.connect(self._emit_pending_frame_request)
+        frame_layout.addWidget(self._frame_slider, stretch=1)
+
+        self._frame_label = QtWidgets.QLabel("Кадр 1 / 1")
+        self._frame_label.setObjectName("frameLabel")
+        self._frame_label.setMinimumWidth(92)
+        self._frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        frame_layout.addWidget(self._frame_label)
+
+        self._next_frame_button = QtWidgets.QPushButton("›")
+        self._next_frame_button.setObjectName("frameNavigationButton")
+        self._next_frame_button.setToolTip("Следующий кадр (Alt + колесо вверх)")
+        self._next_frame_button.setFixedSize(34, 34)
+        self._next_frame_button.clicked.connect(lambda: self._step_frame(1))
+        frame_layout.addWidget(self._next_frame_button)
+        self._frame_controls.hide()
+
     @property
     def note_color(self):
         return self._note_tool.note_color
@@ -110,6 +152,64 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._loading_overlay.setGeometry(self.viewport().rect())
+        self._position_frame_controls()
+
+    def _position_frame_controls(self):
+        if not self._frame_controls.isVisible():
+            return
+        self._frame_controls.adjustSize()
+        available_width = max(180, self.viewport().width() - 24)
+        control_width = min(self._frame_controls.sizeHint().width(), available_width)
+        control_height = self._frame_controls.sizeHint().height()
+        self._frame_controls.resize(control_width, control_height)
+        self._frame_controls.move(
+            max(12, (self.viewport().width() - control_width) // 2),
+            max(12, self.viewport().height() - control_height - 14),
+        )
+        self._frame_controls.raise_()
+
+    def set_frame_navigation(self, current_frame_index, frame_count):
+        self._frame_count = max(1, int(frame_count or 1))
+        self._current_frame_index = max(
+            0,
+            min(self._frame_count - 1, int(current_frame_index or 0)),
+        )
+        self._frame_request_timer.stop()
+        blocked = self._frame_slider.blockSignals(True)
+        self._frame_slider.setRange(0, self._frame_count - 1)
+        self._frame_slider.setValue(self._current_frame_index)
+        self._frame_slider.blockSignals(blocked)
+        self._update_frame_label(self._current_frame_index)
+        self._previous_frame_button.setEnabled(self._current_frame_index > 0)
+        self._next_frame_button.setEnabled(self._current_frame_index < self._frame_count - 1)
+        self._frame_controls.setVisible(self._frame_count > 1)
+        if self._frame_controls.isVisible():
+            self._position_frame_controls()
+
+    def _update_frame_label(self, frame_index):
+        self._frame_label.setText(f"Кадр {frame_index + 1} / {self._frame_count}")
+
+    def _on_frame_slider_changed(self, frame_index):
+        self._update_frame_label(frame_index)
+        self._previous_frame_button.setEnabled(frame_index > 0)
+        self._next_frame_button.setEnabled(frame_index < self._frame_count - 1)
+        self._frame_request_timer.start()
+
+    def _emit_pending_frame_request(self):
+        self._frame_request_timer.stop()
+        target = self._frame_slider.value()
+        if self._frame_count > 1 and target != self._current_frame_index:
+            self.frameChangeRequested.emit(self, target)
+
+    def _step_frame(self, direction):
+        target = max(
+            0,
+            min(self._frame_count - 1, self._frame_slider.value() + int(direction)),
+        )
+        if target == self._frame_slider.value():
+            return
+        self._frame_slider.setValue(target)
+        self._emit_pending_frame_request()
 
     def dragEnterEvent(self, event):
         mime_data = event.mimeData()
@@ -434,6 +534,13 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         angle_delta = event.angleDelta().y()
         if angle_delta == 0:
             return
+        if (
+            self._frame_count > 1
+            and bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        ):
+            self._step_frame(1 if angle_delta > 0 else -1)
+            event.accept()
+            return
         zoom_in = angle_delta > 0
         zoom_step = 1.15
         current_scale = self.transform().m11()
@@ -505,6 +612,7 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.image_array_ref = None
         self.pixel_spacing = 1.0
         self.pixmap_item_ref = None
+        self.set_frame_navigation(0, 1)
         self.clear_all_drawing_items()
 
     def set_tool_mode(self, mode):

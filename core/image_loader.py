@@ -232,6 +232,7 @@ def load_dicom_file(file_path, frame_index=0):
         dataset.get("RescaleIntercept"), 0.0, file_path, "RescaleIntercept"
     )
     view_data.number_of_frames = number_of_frames
+    view_data.current_frame_index = int(frame_index)
 
     wc_value = _first_value(dataset.get("WindowCenter"))
     ww_value = _first_value(dataset.get("WindowWidth"))

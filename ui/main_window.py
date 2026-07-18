@@ -441,6 +441,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.windowLevelStarted.connect(self._on_window_level_started)
             view.windowLevelChanged.connect(self._on_window_level_changed)
             view.windowLevelFinished.connect(self._on_window_level_finished)
+            view.frameChangeRequested.connect(self._on_frame_change_requested)
             self.all_scenes.append(scene)
             self.all_views.append(view)
             view.setVisible(False)
@@ -778,7 +779,16 @@ class DICOMViewer(QtWidgets.QMainWindow):
             self._show_load_error(error)
             return False
 
-    def _start_file_load(self, file_path, view_index, on_success=None, on_failure=None, frame_index=0):
+    def _start_file_load(
+        self,
+        file_path,
+        view_index,
+        on_success=None,
+        on_failure=None,
+        frame_index=0,
+        window_level_override=None,
+        preserve_existing_view=False,
+    ):
         if not (0 <= view_index < MAX_VIEWS):
             return None
         self._next_load_token += 1
@@ -794,9 +804,22 @@ class DICOMViewer(QtWidgets.QMainWindow):
             brightness=self.brightness,
             contrast=self.contrast,
             negative=self.negative_mode,
+            window_level_override=window_level_override,
         )
         task.signals.succeeded.connect(self._on_file_load_succeeded)
         task.signals.failed.connect(self._on_file_load_failed)
+        preserved_view_state = None
+        if preserve_existing_view:
+            current_data = self.view_data[view_index]
+            current_view = self.all_views[view_index]
+            preserved_view_state = {
+                "transform": QtGui.QTransform(current_view.transform()),
+                "horizontal_scroll": current_view.horizontalScrollBar().value(),
+                "vertical_scroll": current_view.verticalScrollBar().value(),
+                "rotation": current_data.rotation,
+                "flip_h": current_data.flip_h,
+                "flip_v": current_data.flip_v,
+            }
         self._pending_loads[token] = {
             "task": task,
             "file_path": file_path,
@@ -804,6 +827,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             "on_success": on_success,
             "on_failure": on_failure,
             "cancelled": False,
+            "preserved_view_state": preserved_view_state,
         }
         self._active_load_token_by_view[view_index] = token
         self.all_views[view_index].set_loading(True)
@@ -821,9 +845,18 @@ class DICOMViewer(QtWidgets.QMainWindow):
             return
         self._active_load_token_by_view.pop(view_index, None)
         try:
+            preserved_view_state = context.get("preserved_view_state")
+            if preserved_view_state is not None:
+                view_data.rotation = preserved_view_state["rotation"]
+                view_data.flip_h = preserved_view_state["flip_h"]
+                view_data.flip_v = preserved_view_state["flip_v"]
             self._clear_view_data(view_index)
             self.view_data[view_index] = view_data
-            self._update_single_view_display(view_index)
+            self._update_single_view_display(
+                view_index,
+                preserve_view=preserved_view_state is not None,
+                preserved_view_state=preserved_view_state,
+            )
             self.all_views[view_index].set_loading(False)
             callback = context.get("on_success")
             if callback:
@@ -873,17 +906,25 @@ class DICOMViewer(QtWidgets.QMainWindow):
         view_index,
         preserve_view=False,
         preview_source_size=None,
+        preserved_view_state=None,
     ):
         if not (0 <= view_index < MAX_VIEWS):
             return
         view = self.all_views[view_index]
         scene = self.all_scenes[view_index]
         vd = self.view_data[view_index]
-        saved_transform = QtGui.QTransform(view.transform()) if preserve_view else None
-        saved_scroll = (
-            view.horizontalScrollBar().value(),
-            view.verticalScrollBar().value(),
-        ) if preserve_view else None
+        if preserved_view_state is not None:
+            saved_transform = QtGui.QTransform(preserved_view_state["transform"])
+            saved_scroll = (
+                preserved_view_state["horizontal_scroll"],
+                preserved_view_state["vertical_scroll"],
+            )
+        else:
+            saved_transform = QtGui.QTransform(view.transform()) if preserve_view else None
+            saved_scroll = (
+                view.horizontalScrollBar().value(),
+                view.verticalScrollBar().value(),
+            ) if preserve_view else None
 
         old_pixmap_item = vd.pixmap_item
         qimg = vd.qimage
@@ -931,6 +972,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.update_overlay_scaling()
             if preview_source_size is None:
                 QtCore.QTimer.singleShot(10, lambda: self._update_image_overlay(view_index))
+        view.set_frame_navigation(vd.current_frame_index, vd.number_of_frames)
 
     def _update_visible_views_display(self):
         for i, view in enumerate(self.all_views):
@@ -980,6 +1022,42 @@ class DICOMViewer(QtWidgets.QMainWindow):
             "wc": float(view_data.wc),
             "ww": max(1.0, float(view_data.ww)),
         }
+
+    def _on_frame_change_requested(self, view_object, frame_index):
+        view_index = self.get_view_index(view_object)
+        if not (0 <= view_index < MAX_VIEWS):
+            return
+        view_data = self.view_data[view_index]
+        if (
+            view_data.file_type != "dicom"
+            or not view_data.file_path
+            or view_data.number_of_frames <= 1
+        ):
+            return
+        target_frame = max(0, min(view_data.number_of_frames - 1, int(frame_index)))
+        if target_frame == view_data.current_frame_index:
+            view_object.set_frame_navigation(
+                view_data.current_frame_index,
+                view_data.number_of_frames,
+            )
+            return
+
+        previous_frame = view_data.current_frame_index
+        frame_count = view_data.number_of_frames
+
+        def restore_frame_controls(_view_index, _error):
+            self.all_views[view_index].set_frame_navigation(previous_frame, frame_count)
+
+        token = self._start_file_load(
+            view_data.file_path,
+            view_index,
+            on_failure=restore_frame_controls,
+            frame_index=target_frame,
+            window_level_override=(view_data.wc, view_data.ww),
+            preserve_existing_view=True,
+        )
+        if token is not None:
+            view_object.set_loading(True, f"Открываю кадр {target_frame + 1} из {frame_count}…")
 
     def _on_window_level_changed(self, view_object, delta_x, delta_y):
         view_index = self.get_view_index(view_object)
