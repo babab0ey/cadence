@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt
 
 from resources.design_tokens import GEOMETRY, apply_soft_shadow, theme_tokens
 from resources.icons import make_icon
+from resources.interactions import install_button_interactions
 
 
 class _ModalBackdrop(QtWidgets.QWidget):
@@ -103,6 +104,7 @@ class ClaudeDialog(QtWidgets.QDialog):
         return button
 
     def showEvent(self, event):
+        install_button_interactions(self, self.dark)
         self._show_backdrop()
         final_geometry = self.geometry()
         start_geometry = QtCore.QRect(final_geometry)

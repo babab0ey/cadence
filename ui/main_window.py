@@ -22,6 +22,7 @@ from core.logging_config import get_log_file, get_logger
 from core.tasks import FileLoadTask
 from models.view_data import ViewData
 from resources.design_tokens import GEOMETRY, build_stylesheet, theme_tokens
+from resources.interactions import install_button_interactions
 from tools.tool_manager import ToolManager
 from ui.viewport import InteractiveGraphicsView
 from ui.sidebar import SidebarWidget
@@ -154,6 +155,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
         # screen before the window is ever shown.
         if self.minimumSize() != self._minimum_ui_size:
             self.setMinimumSize(self._minimum_ui_size)
+        install_button_interactions(self, self.is_dark_theme)
         super().showEvent(event)
 
     @staticmethod
@@ -365,6 +367,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def _enter_single_view_mode(self, view_index):
         if not (0 <= view_index < MAX_VIEWS):
             return
+        focused_view = self.all_views[view_index]
+        start_position = focused_view.mapTo(self.viewport_container, QtCore.QPoint(0, 0))
+        start_rect = QtCore.QRect(start_position, focused_view.size())
+        snapshot = focused_view.grab()
         if not self.focus_mode:
             self._focus_restore_mode = self.current_mode_index
             self._focus_restore_sidebar_visible = self.sidebar.isVisible()
@@ -377,6 +383,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self.toggle_handle.hide()
         self.toolbar.hide()
         self._show_only_view(view_index)
+        QtCore.QTimer.singleShot(
+            0,
+            lambda rect=start_rect, pixmap=snapshot, view=focused_view: self._animate_focus_expansion(view, rect, pixmap),
+        )
         self.focus_controls.show()
         self.focus_controls.raise_()
         if not self._focus_hint_shown:
@@ -386,6 +396,52 @@ class DICOMViewer(QtWidgets.QMainWindow):
             QtCore.QTimer.singleShot(4500, self.focus_hint.hide)
         self._position_focus_overlays()
         self.all_views[view_index].setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _animate_focus_expansion(self, focused_view, start_rect, snapshot):
+        if snapshot.isNull() or not self.viewport_container.isVisible():
+            return
+        end_position = focused_view.mapTo(self.viewport_container, QtCore.QPoint(0, 0))
+        end_rect = QtCore.QRect(end_position, focused_view.size())
+        overlay = QtWidgets.QLabel(self.viewport_container)
+        overlay.setObjectName("focusTransition")
+        overlay.setPixmap(snapshot)
+        overlay.setScaledContents(True)
+        overlay.setGeometry(start_rect)
+        overlay.show()
+        overlay.raise_()
+        opacity_effect = QtWidgets.QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(opacity_effect)
+        opacity_effect.setOpacity(0.96)
+        geometry = QtCore.QPropertyAnimation(overlay, b"geometry")
+        geometry.setStartValue(start_rect)
+        geometry.setEndValue(end_rect)
+        opacity = QtCore.QPropertyAnimation(opacity_effect, b"opacity")
+        opacity.setStartValue(0.96)
+        opacity.setEndValue(0.0)
+        group = QtCore.QParallelAnimationGroup(self)
+        for animation in (geometry, opacity):
+            animation.setDuration(300)
+            animation.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+            group.addAnimation(animation)
+        group.finished.connect(overlay.deleteLater)
+        group.finished.connect(lambda: setattr(self, "_focus_transition", None))
+        self._focus_transition = group
+        group.start()
+
+    def _animate_layout_transition(self, duration=200):
+        if not self.isVisible() or not hasattr(self, "view_container_widget"):
+            return
+        effect = QtWidgets.QGraphicsOpacityEffect(self.view_container_widget)
+        effect.setOpacity(0.28)
+        self.view_container_widget.setGraphicsEffect(effect)
+        animation = QtCore.QPropertyAnimation(effect, b"opacity", self)
+        animation.setStartValue(0.28)
+        animation.setEndValue(1.0)
+        animation.setDuration(duration)
+        animation.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        animation.finished.connect(lambda: self.view_container_widget.setGraphicsEffect(None))
+        self._layout_transition = animation
+        animation.start()
 
     def _show_only_view(self, view_index):
         while self.view_layout.count():
@@ -590,6 +646,7 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 if i != first_visible_idx:
                     self._update_view_border(i, False)
             QtCore.QTimer.singleShot(0, lambda: self.all_views[first_visible_idx].setFocus(Qt.FocusReason.OtherFocusReason))
+        self._animate_layout_transition(200)
 
     def _get_visible_indices(self):
         if self.current_mode_index == 0:
