@@ -275,6 +275,15 @@ def load_dicom_file(file_path, frame_index=0):
     view_data.series_description = fix_dicom_encoding(
         str(dataset.get("SeriesDescription", "")), specific_character_set
     )
+    view_data.manufacturer = fix_dicom_encoding(
+        str(dataset.get("Manufacturer", "N/A")), specific_character_set
+    )
+    view_data.equipment_model = fix_dicom_encoding(
+        str(dataset.get("ManufacturerModelName", "N/A")), specific_character_set
+    )
+    view_data.station_name = fix_dicom_encoding(
+        str(dataset.get("StationName", "N/A")), specific_character_set
+    )
 
     del dataset
     gc.collect()

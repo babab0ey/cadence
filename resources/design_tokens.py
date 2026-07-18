@@ -1,6 +1,7 @@
 """Single source of truth for the Claude-inspired application design system."""
 
 from pathlib import Path
+import re
 
 from PyQt6 import QtGui, QtWidgets
 
@@ -105,9 +106,20 @@ def apply_soft_shadow(widget, dark: bool = False, blur: int = 32, y_offset: int 
     effect = QtWidgets.QGraphicsDropShadowEffect(widget)
     effect.setBlurRadius(blur)
     effect.setOffset(0, y_offset)
-    effect.setColor(QtGui.QColor(tokens["shadow_color"]))
+    effect.setColor(qcolor(tokens["shadow_color"]))
     widget.setGraphicsEffect(effect)
     return effect
+
+
+def qcolor(value: str) -> QtGui.QColor:
+    """Convert a design-token CSS color, including rgba(), to QColor."""
+    match = re.fullmatch(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)", value)
+    if not match:
+        return QtGui.QColor(value)
+    red, green, blue = (int(match.group(index)) for index in range(1, 4))
+    alpha_value = float(match.group(4))
+    alpha = round(alpha_value * 255) if alpha_value <= 1 else round(alpha_value)
+    return QtGui.QColor(red, green, blue, max(0, min(255, alpha)))
 
 
 def build_stylesheet(dark: bool = False) -> str:

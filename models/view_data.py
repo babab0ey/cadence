@@ -37,6 +37,9 @@ class ViewData:
     overlay_items: List = field(default_factory=list)
     file_type: str = 'unknown'
     series_description: str = ''
+    manufacturer: str = 'N/A'
+    equipment_model: str = 'N/A'
+    station_name: str = 'N/A'
 
     def is_loaded(self) -> bool:
         return self.original_array is not None
