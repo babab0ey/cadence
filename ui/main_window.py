@@ -526,29 +526,20 @@ class DICOMViewer(QtWidgets.QMainWindow):
     def _handle_sidebar_drop(self, target_idx, dropped_file_path):
         if dropped_file_path not in self.sidebar.extra_files:
             return
-        file_currently_in_view = self.view_data[target_idx].file_path
 
         def finalize_sidebar_drop(view_index, _view_data):
             if dropped_file_path not in self.sidebar.extra_files:
                 return
-            if file_currently_in_view and os.path.exists(file_currently_in_view):
-                try:
-                    dropped_index = self.sidebar.extra_files.index(dropped_file_path)
-                    self.sidebar.extra_files[dropped_index] = file_currently_in_view
-                except ValueError:
-                    self.sidebar.extra_files.append(file_currently_in_view)
-            else:
-                self.sidebar.extra_files.remove(dropped_file_path)
             self.set_active_view(self.all_views[target_idx])
             QtCore.QTimer.singleShot(50, lambda: self._update_image_overlay(target_idx))
-            self.sidebar.update_sidebar()
 
         self._start_file_load(dropped_file_path, target_idx, on_success=finalize_sidebar_drop)
 
     def _handle_main_view_to_sidebar_drop(self, source_view_idx, source_file_path):
         if self.view_data[source_view_idx].file_path != source_file_path:
             return
-        self.sidebar.extra_files.append(source_file_path)
+        if source_file_path not in self.sidebar.extra_files:
+            self.sidebar.extra_files.append(source_file_path)
         self._clear_view_data(source_view_idx)
         self._update_single_view_display(source_view_idx)
         self.sidebar.update_sidebar()
@@ -573,7 +564,13 @@ class DICOMViewer(QtWidgets.QMainWindow):
         if file_name:
             def on_loaded(_index, _view_data):
                 self.set_active_view(self.all_views[view_index])
-                self.sidebar.extra_files.clear()
+                files_by_ext = scan_folder_for_files(os.path.dirname(file_name))
+                folder_files = [
+                    path
+                    for paths in files_by_ext.values()
+                    for path in paths
+                ]
+                self.sidebar.extra_files = sort_files_for_mammo(folder_files or [file_name])
                 self.sidebar.update_sidebar()
 
             self._start_file_load(file_name, view_index, on_success=on_loaded)
@@ -647,15 +644,15 @@ class DICOMViewer(QtWidgets.QMainWindow):
         if not file_paths:
             return
         sorted_files = sort_files_for_mammo(file_paths)
-        files_for_main, files_for_sidebar = distribute_files(sorted_files)
+        files_for_main, _files_beyond_first_views = distribute_files(sorted_files)
         self.clear_all_views_data()
-        self.sidebar.extra_files = files_for_sidebar
+        # The sidebar is a folder catalogue, not an overflow bucket. Active
+        # files remain visible so the user always sees the complete study.
+        self.sidebar.extra_files = list(sorted_files)
         num_files = len(files_for_main)
         new_mode = determine_mode(num_files)
-        if new_mode != self.current_mode_index:
-            self.toolbar.set_current_mode(new_mode)
-        else:
-            self._setup_layout_for_mode(new_mode)
+        self.toolbar.set_current_mode(new_mode)
+        self._setup_layout_for_mode(new_mode)
         QtCore.QTimer.singleShot(0, lambda: self._load_files_into_views(files_for_main))
         QtCore.QTimer.singleShot(0, self.sidebar.update_sidebar)
 

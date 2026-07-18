@@ -307,9 +307,9 @@ class SidebarWidget(QtWidgets.QWidget):
 
         self.empty_state.hide()
 
-        # Add thumbnails (limit to 200 for perf)
-        limit = 200
-        for file_path in visible_files[:limit]:
+        # Keep the complete folder visible. Stage 3 will virtualize this list
+        # without changing its catalogue semantics.
+        for file_path in visible_files:
             thumbnail = ThumbnailWidget(file_path, self.thumbnail_pool)
             self.scroll_area_layout.addWidget(thumbnail)
 
