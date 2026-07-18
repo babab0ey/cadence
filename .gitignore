@@ -3,3 +3,37 @@ __pycache__/
 logs/
 .pytest_cache/
 .coverage
+
+# Local environments and IDE files
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+
+# Build output (publish executables through GitHub Releases)
+build/
+dist/
+
+# Medical data must never be committed to the public repository.
+# Screenshots in assets/screenshots are generated from synthetic arrays.
+*.dcm
+*.DCM
+*.dicom
+*.DICOM
+*.ima
+*.IMA
+*.img
+*.IMG
+DICOMDIR
+*.nii
+*.nii.gz
+*.nrrd
+*.mha
+*.mhd
+patient-data/
+patient_data/
+dicom-data/
+dicom_data/
+studies/
+exports/

@@ -1,7 +1,11 @@
-PyQt6>=6.5.0
+PyQt6==6.11.0
 PyQt6-Fluent-Widgets==1.11.2
-pydicom>=3.0.0
-numpy>=2.0.0,<3.0
-Pillow>=10.0.0
-pylibjpeg[all]>=2.0.0
-pyjpegls>=1.5.0
+pydicom==3.0.2
+numpy==2.4.0
+Pillow==12.1.0
+
+# Pixel-data decoders for common compressed DICOM transfer syntaxes
+pylibjpeg==2.1.0
+pylibjpeg-libjpeg==2.4.0
+pylibjpeg-openjpeg==2.5.0
+pyjpegls==1.5.1
