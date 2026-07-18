@@ -36,6 +36,13 @@ class FocusModeTests(unittest.TestCase):
         self.assertFalse(self.window.toolbar.isVisible())
         self.assertTrue(self.window.focus_controls.isVisible())
         self.assertTrue(self.window.focus_info_button.isVisible())
+        focused_view = self.window.all_views[2]
+        self.assertGreaterEqual(
+            focused_view.width(), self.window.view_container_widget.width() - 2
+        )
+        self.assertGreaterEqual(
+            focused_view.height(), self.window.view_container_widget.height() - 2
+        )
 
         self.window._exit_single_view_mode()
         self.app.processEvents()

@@ -330,7 +330,10 @@ class DICOMViewer(QtWidgets.QMainWindow):
                 widget.hide()
                 widget.setParent(None)
         focused_view = self.all_views[view_index]
-        self.view_layout.addWidget(focused_view, 0, 0, 1, 1)
+        # Span the complete 2x2 grid.  The previous layout may leave stretch
+        # factors on its second row/column; a 1x1 cell would then occupy only
+        # one quarter of the available viewport area.
+        self.view_layout.addWidget(focused_view, 0, 0, 2, 2)
         focused_view.show()
         for index, view in enumerate(self.all_views):
             if index != view_index:
