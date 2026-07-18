@@ -416,6 +416,38 @@ def update_brightness_contrast_only(view_data, brightness=0, contrast=1.0, negat
     view_data.qimage = convert_numpy_to_qimage(view_data.adjusted_array)
 
 
+def create_window_level_preview(
+    view_data,
+    max_size=1024,
+    brightness=0,
+    contrast=1.0,
+    negative=False,
+):
+    """Create a temporary reduced display image for responsive mouse dragging."""
+    if view_data.original_array is None:
+        return None
+    preview_source = downsample_array(view_data.original_array, max_size=max_size)
+    if preview_source is None:
+        return None
+    preview_base = apply_rescale_window(
+        preview_source,
+        view_data.rescale_slope,
+        view_data.rescale_intercept,
+        view_data.wc,
+        view_data.ww,
+        view_data.photometric_interpretation,
+    )
+    preview_adjusted = apply_brightness_contrast(
+        preview_base,
+        brightness,
+        contrast,
+        negative,
+    )
+    preview_image = convert_numpy_to_qimage(preview_adjusted)
+    del preview_source, preview_base, preview_adjusted
+    return preview_image
+
+
 def load_thumbnail_qimage(file_path, max_size=160):
     """Decode one frame, immediately downsample it and release the full buffer."""
     extension = os.path.splitext(file_path)[1].lower()

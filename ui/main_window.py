@@ -11,7 +11,12 @@ from core.workspace_manager import (
     scan_folder_for_files, distribute_files, determine_mode, get_projection_info
 )
 from core.utils import SUPPORTED_EXTS, DICOM_EXTS, IMAGE_EXTS, JSON_EXTS, PIL_AVAILABLE, convert_numpy_to_qimage
-from core.image_loader import load_generic_file, apply_adjustments_pipeline, update_brightness_contrast_only
+from core.image_loader import (
+    apply_adjustments_pipeline,
+    create_window_level_preview,
+    load_generic_file,
+    update_brightness_contrast_only,
+)
 from core.errors import ViewerError, wrap_unexpected_error
 from core.logging_config import get_log_file, get_logger
 from core.tasks import FileLoadTask
@@ -69,6 +74,12 @@ class DICOMViewer(QtWidgets.QMainWindow):
         self._active_load_token_by_view = {}
         self._batch_load_id = 0
         self._batch_load_state = None
+        self._window_level_state = {}
+        self._pending_window_level_view_index = None
+        self._window_level_render_timer = QtCore.QTimer(self)
+        self._window_level_render_timer.setSingleShot(True)
+        self._window_level_render_timer.setInterval(16)
+        self._window_level_render_timer.timeout.connect(self._render_pending_window_level)
 
         self._setup_central_widget()
         self._create_view_widgets()
@@ -368,6 +379,9 @@ class DICOMViewer(QtWidgets.QMainWindow):
             view.singleViewToggleRequested.connect(self._toggle_single_view_for_view)
             view.viewDropOccurred.connect(self.swap_view_data)
             view.sidebarFileDropped.connect(self._handle_sidebar_drop)
+            view.windowLevelStarted.connect(self._on_window_level_started)
+            view.windowLevelChanged.connect(self._on_window_level_changed)
+            view.windowLevelFinished.connect(self._on_window_level_finished)
             self.all_scenes.append(scene)
             self.all_views.append(view)
             view.setVisible(False)
@@ -807,12 +821,22 @@ class DICOMViewer(QtWidgets.QMainWindow):
             message.setDetailedText(f"Журнал: {log_file}\nКод ошибки: {error.code}")
         message.exec()
 
-    def _update_single_view_display(self, view_index):
+    def _update_single_view_display(
+        self,
+        view_index,
+        preserve_view=False,
+        preview_source_size=None,
+    ):
         if not (0 <= view_index < MAX_VIEWS):
             return
         view = self.all_views[view_index]
         scene = self.all_scenes[view_index]
         vd = self.view_data[view_index]
+        saved_transform = QtGui.QTransform(view.transform()) if preserve_view else None
+        saved_scroll = (
+            view.horizontalScrollBar().value(),
+            view.verticalScrollBar().value(),
+        ) if preserve_view else None
 
         old_pixmap_item = vd.pixmap_item
         qimg = vd.qimage
@@ -847,13 +871,19 @@ class DICOMViewer(QtWidgets.QMainWindow):
 
         view.set_image_data(vd.adjusted_array, vd.pixel_spacing, pixmap_item)
         pixmap_item.setZValue(0)
-        self._apply_item_transformations(view_index)
+        self._apply_item_transformations(view_index, source_size=preview_source_size)
         scene_rect = pixmap_item.sceneBoundingRect()
         scene.setSceneRect(scene_rect)
         if view.isVisible():
-            view.fitInView(scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
+            if preserve_view and saved_transform is not None and saved_scroll is not None:
+                view.setTransform(saved_transform)
+                view.horizontalScrollBar().setValue(saved_scroll[0])
+                view.verticalScrollBar().setValue(saved_scroll[1])
+            else:
+                view.fitInView(scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
             view.update_overlay_scaling()
-            QtCore.QTimer.singleShot(10, lambda: self._update_image_overlay(view_index))
+            if preview_source_size is None:
+                QtCore.QTimer.singleShot(10, lambda: self._update_image_overlay(view_index))
 
     def _update_visible_views_display(self):
         for i, view in enumerate(self.all_views):
@@ -882,19 +912,119 @@ class DICOMViewer(QtWidgets.QMainWindow):
             active = self.view_data[self.last_active_view_index]
             self._show_load_error(wrap_unexpected_error(exc, active.file_path or ""))
 
-    def _apply_item_transformations(self, view_index):
+    def _on_window_level_started(self, view_object):
+        view_index = self.get_view_index(view_object)
+        if not (0 <= view_index < MAX_VIEWS):
+            return
+        view_data = self.view_data[view_index]
+        if view_data.original_array is None:
+            return
+
+        if view_data.wc is None or view_data.ww is None:
+            raw_min = float(view_data.original_array.min())
+            raw_max = float(view_data.original_array.max())
+            value_a = raw_min * view_data.rescale_slope + view_data.rescale_intercept
+            value_b = raw_max * view_data.rescale_slope + view_data.rescale_intercept
+            lower, upper = min(value_a, value_b), max(value_a, value_b)
+            view_data.wc = (lower + upper) / 2.0
+            view_data.ww = max(1.0, upper - lower)
+
+        self._window_level_state[view_index] = {
+            "wc": float(view_data.wc),
+            "ww": max(1.0, float(view_data.ww)),
+        }
+
+    def _on_window_level_changed(self, view_object, delta_x, delta_y):
+        view_index = self.get_view_index(view_object)
+        state = self._window_level_state.get(view_index)
+        if state is None:
+            return
+        view_data = self.view_data[view_index]
+        width_sensitivity = state["ww"] / max(160, view_object.viewport().width()) * 2.0
+        level_sensitivity = state["ww"] / max(160, view_object.viewport().height()) * 2.0
+        view_data.ww = max(1.0, state["ww"] + float(delta_x) * width_sensitivity)
+        # Moving up decreases the window center and therefore makes the image brighter.
+        view_data.wc = state["wc"] + float(delta_y) * level_sensitivity
+        self._pending_window_level_view_index = view_index
+        if not self._window_level_render_timer.isActive():
+            self._window_level_render_timer.start()
+
+    def _on_window_level_finished(self, view_object):
+        view_index = self.get_view_index(view_object)
+        self._window_level_render_timer.stop()
+        self._pending_window_level_view_index = view_index
+        self._render_pending_window_level(full_resolution=True)
+        self._window_level_state.pop(view_index, None)
+
+    def _render_pending_window_level(self, full_resolution=False):
+        view_index = self._pending_window_level_view_index
+        self._pending_window_level_view_index = None
+        if not (isinstance(view_index, int) and 0 <= view_index < MAX_VIEWS):
+            return
+        view_data = self.view_data[view_index]
+        if not view_data.is_loaded():
+            return
+        try:
+            if full_resolution:
+                apply_adjustments_pipeline(
+                    view_data,
+                    self.brightness,
+                    self.contrast,
+                    self.negative_mode,
+                )
+                self._update_single_view_display(view_index, preserve_view=True)
+            else:
+                view = self.all_views[view_index]
+                device_scale = max(1.0, float(view.devicePixelRatioF()))
+                viewport_size = max(view.viewport().width(), view.viewport().height(), 512)
+                preview_size = min(2048, int(viewport_size * device_scale * 1.35))
+                preview = create_window_level_preview(
+                    view_data,
+                    max_size=preview_size,
+                    brightness=self.brightness,
+                    contrast=self.contrast,
+                    negative=self.negative_mode,
+                )
+                if preview is not None and not preview.isNull():
+                    view_data.qimage = preview
+                    self._update_single_view_display(
+                        view_index,
+                        preserve_view=True,
+                        preview_source_size=view_data.original_array.shape[:2],
+                    )
+        except BaseException as exc:
+            self._show_load_error(wrap_unexpected_error(exc, view_data.file_path or ""))
+
+    def _apply_item_transformations(self, view_index, source_size=None):
         vd = self.view_data[view_index]
         item = vd.pixmap_item
         if not item:
             return
-        center = item.boundingRect().center()
-        item.setTransformOriginPoint(center)
-        transform = QtGui.QTransform()
-        transform.translate(center.x(), center.y())
-        transform.rotate(vd.rotation)
-        transform.scale(-1 if vd.flip_h else 1, -1 if vd.flip_v else 1)
-        transform.translate(-center.x(), -center.y())
-        item.setTransform(transform)
+        if source_size is None:
+            center = item.boundingRect().center()
+            item.setTransformOriginPoint(center)
+            transform = QtGui.QTransform()
+            transform.translate(center.x(), center.y())
+            transform.rotate(vd.rotation)
+            transform.scale(-1 if vd.flip_h else 1, -1 if vd.flip_v else 1)
+            transform.translate(-center.x(), -center.y())
+            item.setTransform(transform)
+            return
+
+        source_height, source_width = source_size
+        preview_width = max(1, item.pixmap().width())
+        preview_height = max(1, item.pixmap().height())
+        scale_transform = QtGui.QTransform.fromScale(
+            source_width / preview_width,
+            source_height / preview_height,
+        )
+        source_center = QtCore.QPointF(source_width / 2.0, source_height / 2.0)
+        orientation = QtGui.QTransform()
+        orientation.translate(source_center.x(), source_center.y())
+        orientation.rotate(vd.rotation)
+        orientation.scale(-1 if vd.flip_h else 1, -1 if vd.flip_v else 1)
+        orientation.translate(-source_center.x(), -source_center.y())
+        item.setTransform(scale_transform * orientation)
 
     def _update_view_after_transform(self, view_index):
         view = self.all_views[view_index]

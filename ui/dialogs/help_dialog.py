@@ -76,8 +76,8 @@ class HelpDialog(QtWidgets.QDialog):
             <tr><td><span class="key">Ctrl + +</span></td><td>Увеличить</td></tr>
             <tr><td><span class="key">Ctrl + -</span></td><td>Уменьшить</td></tr>
             <tr><td><span class="key">Ctrl + 0</span></td><td>Сбросить масштаб</td></tr>
-            <tr><td><span class="key">F11</span></td><td>Режим фокуса</td></tr>
-            <tr><td><span class="key">Esc</span></td><td>Курсор (сброс инструмента)</td></tr>
+            <tr><td><span class="key">F11</span></td><td>Системный полноэкранный режим</td></tr>
+            <tr><td><span class="key">Esc</span></td><td>Выйти из одиночного просмотра или сбросить инструмент</td></tr>
             <tr><td><span class="key">Alt + R</span></td><td>Инструмент: Рулетка</td></tr>
             <tr><td><span class="key">Alt + A</span></td><td>Инструмент: Угол</td></tr>
             <tr><td><span class="key">Alt + O</span></td><td>Инструмент: ROI прямоугольник</td></tr>
@@ -88,8 +88,10 @@ class HelpDialog(QtWidgets.QDialog):
         <h2>Навигация</h2>
         <ul>
             <li><b>Колесо мыши</b> — зум от курсора</li>
-            <li><b>Правая кнопка + перетаскивание</b> — панорамирование</li>
-            <li><b>Двойной клик</b> — открыть папку</li>
+            <li><b>Правая кнопка + движение</b> — яркость и контраст: по горизонтали контраст, по вертикали яркость</li>
+            <li><b>Средняя кнопка + движение</b> — перемещение снимка</li>
+            <li><b>Shift + левая кнопка + движение</b> — перемещение снимка</li>
+            <li><b>Двойной клик по снимку</b> — одиночный просмотр; повторный двойной клик или Esc — выйти</li>
             <li><b>Drag &amp; Drop</b> — обмен изображениями между окнами и боковой панелью</li>
         </ul>
 

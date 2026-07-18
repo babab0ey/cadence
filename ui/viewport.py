@@ -18,6 +18,9 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     singleViewToggleRequested = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
     viewDropOccurred = QtCore.pyqtSignal(int, int)
     sidebarFileDropped = QtCore.pyqtSignal(int, str)
+    windowLevelStarted = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
+    windowLevelChanged = QtCore.pyqtSignal(QtWidgets.QGraphicsView, int, int)
+    windowLevelFinished = QtCore.pyqtSignal(QtWidgets.QGraphicsView)
 
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
@@ -45,7 +48,11 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.pixel_spacing = 1.0
         self.pixmap_item_ref = None
         self._is_panning = False
+        self._pan_button = Qt.MouseButton.NoButton
         self._pan_start_pos = QtCore.QPoint()
+        self._is_window_leveling = False
+        self._wl_start_pos = QtCore.QPoint()
+        self._wl_hint_shown = False
         self._drag_start_pos = QtCore.QPoint()
         self._zoom_factor = 1.0
         self._min_zoom = 0.1
@@ -203,15 +210,40 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
         self.viewClicked.emit(self)
         mouse_pos = event.position().toPoint()
 
-        if event.button() == Qt.MouseButton.LeftButton and self.pixmap_item_ref:
-            self._drag_start_pos = mouse_pos
-
         if event.button() == Qt.MouseButton.RightButton and self.pixmap_item_ref:
+            self._is_window_leveling = True
+            self._wl_start_pos = mouse_pos
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            self.windowLevelStarted.emit(self)
+            if not self._wl_hint_shown:
+                self._wl_hint_shown = True
+                QtWidgets.QToolTip.showText(
+                    event.globalPosition().toPoint(),
+                    "Зажмите правую кнопку и двигайте мышь:\n← → контраст, ↑ ↓ яркость",
+                    self,
+                    QtCore.QRect(),
+                    4200,
+                )
+            event.accept()
+            return
+
+        wants_pan = (
+            event.button() == Qt.MouseButton.MiddleButton
+            or (
+                event.button() == Qt.MouseButton.LeftButton
+                and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            )
+        )
+        if wants_pan and self.pixmap_item_ref:
             self._is_panning = True
+            self._pan_button = event.button()
             self._pan_start_pos = mouse_pos
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
+
+        if event.button() == Qt.MouseButton.LeftButton and self.pixmap_item_ref:
+            self._drag_start_pos = mouse_pos
 
         if event.button() == Qt.MouseButton.LeftButton:
             if not self.pixmap_item_ref and self.tool_mode == ToolManager.TOOL_NONE:
@@ -256,6 +288,22 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     def mouseMoveEvent(self, event):
         mouse_pos = event.position().toPoint()
 
+        if self._is_window_leveling and bool(event.buttons() & Qt.MouseButton.RightButton):
+            delta = mouse_pos - self._wl_start_pos
+            self.windowLevelChanged.emit(self, delta.x(), delta.y())
+            event.accept()
+            return
+
+        if self._is_panning and bool(event.buttons() & self._pan_button):
+            delta = mouse_pos - self._pan_start_pos
+            h_bar = self.horizontalScrollBar()
+            v_bar = self.verticalScrollBar()
+            h_bar.setValue(h_bar.value() - delta.x())
+            v_bar.setValue(v_bar.value() - delta.y())
+            self._pan_start_pos = mouse_pos
+            event.accept()
+            return
+
         if (event.buttons() & Qt.MouseButton.LeftButton) and self.pixmap_item_ref and self.tool_mode == ToolManager.TOOL_NONE:
             if (mouse_pos - self._drag_start_pos).manhattanLength() < QtWidgets.QApplication.startDragDistance():
                 return
@@ -277,16 +325,6 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
                 drag.setPixmap(pixmap)
                 drag.setHotSpot(hotSpot)
             drag.exec(Qt.DropAction.MoveAction)
-            return
-
-        if self._is_panning and event.buttons() == Qt.MouseButton.RightButton:
-            delta = mouse_pos - self._pan_start_pos
-            h_bar = self.horizontalScrollBar()
-            v_bar = self.verticalScrollBar()
-            h_bar.setValue(h_bar.value() - delta.x())
-            v_bar.setValue(v_bar.value() - delta.y())
-            self._pan_start_pos = mouse_pos
-            event.accept()
             return
 
         if self.tool_mode != ToolManager.TOOL_NONE and event.buttons() == Qt.MouseButton.LeftButton:
@@ -334,8 +372,16 @@ class InteractiveGraphicsView(QtWidgets.QGraphicsView):
     def mouseReleaseEvent(self, event):
         mouse_pos = event.position().toPoint()
 
-        if event.button() == Qt.MouseButton.RightButton and self._is_panning:
+        if event.button() == Qt.MouseButton.RightButton and self._is_window_leveling:
+            self._is_window_leveling = False
+            self.windowLevelFinished.emit(self)
+            self.set_tool_mode(self.tool_mode)
+            event.accept()
+            return
+
+        if event.button() == self._pan_button and self._is_panning:
             self._is_panning = False
+            self._pan_button = Qt.MouseButton.NoButton
             self.set_tool_mode(self.tool_mode)
             event.accept()
             return
