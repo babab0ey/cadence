@@ -125,9 +125,9 @@ class SettingsDialog(ClaudeDialog):
         body_layout.addWidget(notes)
 
         about = SettingsSection("О программе")
-        version = QtWidgets.QLabel("Версия 2.0")
+        version = QtWidgets.QLabel("Версия 2.0.0")
         version.setProperty("role", "secondary")
-        about.add_row("Claude DICOM Viewer", "Безопасный просмотр медицинских снимков", version)
+        about.add_row("Cadence", "Безопасный просмотр медицинских снимков", version)
         self.log_button = QtWidgets.QPushButton("Открыть журнал")
         self.log_button.setFixedWidth(220)
         self.log_button.setProperty("buttonStyle", "secondary")
